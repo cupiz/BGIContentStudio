@@ -44,6 +44,247 @@ async function startServer(port, maxAttempts = 20) {
 }
 
 /**
+ * Stealth evasions untuk menghindari deteksi Playwright oleh Google/Gemini.
+ * Panggil setelah context dibuat, sebelum navigasi ke Gemini.
+ */
+// ============================================================
+// STEALTH CONFIGURATION — diperbarui untuk Chrome 135 (2026)
+// ============================================================
+
+// User-agent Chrome real Windows (versi 2026)
+const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36';
+
+// Alternatif: Edge UA (lebih jarang diblokir karena Edge = Chromium resmi)
+const EDGE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0';
+
+// Daftar viewport yang umum dipakai (variasi realistis)
+const VIEWPORT_PRESETS = [
+  { width: 1280, height: 800 },
+  { width: 1366, height: 768 },
+  { width: 1440, height: 900 },
+  { width: 1536, height: 864 },
+  { width: 1920, height: 1080 },
+  { width: 1600, height: 900 },
+];
+
+function randomViewport() {
+  const preset = VIEWPORT_PRESETS[Math.floor(Math.random() * VIEWPORT_PRESETS.length)];
+  // Tambah variasi ±5px agar tidak selalu sama
+  return {
+    width: preset.width + Math.floor(Math.random() * 10) - 5,
+    height: preset.height + Math.floor(Math.random() * 10) - 5,
+  };
+}
+
+function randomTimezone() {
+  const timezones = [
+    'Asia/Jakarta', 'Asia/Makassar', 'Asia/Jayapura',
+    'Asia/Singapore', 'Asia/Bangkok', 'Asia/Kuala_Lumpur'
+  ];
+  return timezones[Math.floor(Math.random() * timezones.length)];
+}
+
+/**
+ * Stealth evasions KOMPREHENSIF untuk menghindari deteksi Playwright oleh Google/Gemini.
+ * Mencakup 15+ sinyal fingerprint yang biasa dicek oleh Google Bot Detection.
+ * Panggil setelah context dibuat, sebelum navigasi ke Gemini.
+ */
+async function applyStealthEvasions(context) {
+  await context.addInitScript(() => {
+    // ============================================================
+    // 1. webdriver — sinyal PALING PENTING, wajib disembunyikan
+    // ============================================================
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => undefined,
+    });
+
+    // ============================================================
+    // 2. chrome.runtime — sinyal automation klasik
+    // ============================================================
+    if (window.chrome && window.chrome.runtime) {
+      try {
+        Object.defineProperty(window.chrome, 'runtime', {
+          get: () => undefined,
+          configurable: true,
+        });
+      } catch (_) {
+        try { delete window.chrome.runtime; } catch (_e) {}
+      }
+    }
+
+    // ============================================================
+    // 3. navigator.languages — set bahasa wajar
+    // ============================================================
+    Object.defineProperty(navigator, 'languages', {
+      get: () => ['id-ID', 'id', 'en-US', 'en'],
+    });
+
+    // ============================================================
+    // 4. navigator.platform — set platform wajar
+    // ============================================================
+    Object.defineProperty(navigator, 'platform', {
+      get: () => 'Win32',
+    });
+
+    // ============================================================
+    // 5. navigator.plugins — Chrome real punya ~5 plugin
+    // Playwright headless punya 0 atau array kosong → SANGAT CURIGA
+    // ============================================================
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => [
+        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+        { name: 'Native Client', filename: 'internal-nacl-plugin' },
+      ],
+    });
+
+    // ============================================================
+    // 6. navigator.mimeTypes — Chrome real punya ~4 mime types
+    // ============================================================
+    Object.defineProperty(navigator, 'mimeTypes', {
+      get: () => [
+        { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' },
+        { type: 'text/pdf', suffixes: 'pdf', description: 'Portable Document Format' },
+        { type: 'application/x-google-chrome-pdf', suffixes: 'pdf', description: 'Portable Document Format' },
+        { type: 'application/x-nacl', suffixes: '', description: 'Native Client Executable' },
+      ],
+    });
+
+    // ============================================================
+    // 7. navigator.hardwareConcurrency — CPU cores
+    // Headless sering lapor 2 atau 4, tapi real PC bisa 8/16
+    // ============================================================
+    const cpuCores = [4, 8, 12, 16][Math.floor(Math.random() * 4)];
+    Object.defineProperty(navigator, 'hardwareConcurrency', {
+      get: () => cpuCores,
+    });
+
+    // ============================================================
+    // 8. navigator.deviceMemory — RAM dalam GB
+    // Headless undefined, real PC 4/8
+    // ============================================================
+    Object.defineProperty(navigator, 'deviceMemory', {
+      get: () => [4, 8, 8, 16][Math.floor(Math.random() * 4)],
+    });
+
+    // ============================================================
+    // 9. navigator.connection — Network type
+    // ============================================================
+    Object.defineProperty(navigator, 'connection', {
+      get: () => ({
+        effectiveType: ['4g', '4g', '4g', 'wifi'][Math.floor(Math.random() * 4)],
+        downlink: 10,
+        rtt: 50,
+        saveData: false,
+      }),
+    });
+
+    // ============================================================
+    // 10. navigator.pdfViewerEnabled — property baru di Chrome 135+
+    // ============================================================
+    Object.defineProperty(navigator, 'pdfViewerEnabled', {
+      get: () => true,
+    });
+
+    // ============================================================
+    // 11. WebGL vendor/renderer — Headless punya fingerprint
+    //     'Google Inc. (Intel)' vs 'Google SwiftShader' (headless)
+    // ============================================================
+    try {
+      const getWebGLInfo = () => {
+        const canvas = document.createElement('canvas');
+        const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+        if (gl) {
+          const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+          if (debugInfo) {
+            return {
+              vendor: gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL),
+              renderer: gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL),
+            };
+          }
+        }
+        return null;
+      };
+      const webglInfo = getWebGLInfo();
+      // Jika renderer mengandung 'SwiftShader' atau 'Mesa' → headless detected
+      if (webglInfo && (
+        webglInfo.renderer.toLowerCase().includes('swiftshader') ||
+        webglInfo.renderer.toLowerCase().includes('mesa') ||
+        webglInfo.vendor.toLowerCase().includes('mesa')
+      )) {
+        // Override WebGL info dengan nilai realistik
+        const origGetParam1 = WebGLRenderingContext.prototype.getParameter;
+        WebGLRenderingContext.prototype.getParameter = function(parameter) {
+          if (parameter === 0x1F01) return 'Intel Inc.\u0020';     // UNMASKED_VENDOR_WEBGL
+          if (parameter === 0x1F00) return 'Intel(R) Iris(R) Xe Graphics'; // UNMASKED_RENDERER_WEBGL
+          return origGetParam1.call(this, parameter);
+        };
+        // Juga override WebGL2 (Gemini modern pakai WebGL2)
+        if (window.WebGL2RenderingContext) {
+          const origGetParam2 = WebGL2RenderingContext.prototype.getParameter;
+          WebGL2RenderingContext.prototype.getParameter = function(parameter) {
+            if (parameter === 0x1F01) return 'Intel Inc.\u0020';
+            if (parameter === 0x1F00) return 'Intel(R) Iris(R) Xe Graphics';
+            return origGetParam2.call(this, parameter);
+          };
+        }
+      }
+    } catch (_) {}
+
+    // ============================================================
+    // 12. Screen properties — colorDepth, orientation
+    // ============================================================
+    Object.defineProperty(screen, 'colorDepth', {
+      get: () => 24,
+    });
+    Object.defineProperty(screen, 'pixelDepth', {
+      get: () => 24,
+    });
+
+    // ============================================================
+    // 13. navigator.permissions — override query untuk
+    //     menghindari fingerprint permission state
+    // ============================================================
+    if (navigator.permissions && navigator.permissions.query) {
+      const originalQuery = navigator.permissions.query.bind(navigator.permissions);
+      navigator.permissions.query = (desc) => {
+        if (desc.name === 'notifications') {
+          return Promise.resolve({ state: 'prompt', onchange: null });
+        }
+        return originalQuery(desc);
+      };
+    }
+
+    // ============================================================
+    // 14. navigator.mediaCapabilities — headless sering beda
+    // ============================================================
+    if (navigator.mediaCapabilities && navigator.mediaCapabilities.decodingInfo) {
+      const originalDecodingInfo = navigator.mediaCapabilities.decodingInfo.bind(navigator.mediaCapabilities);
+      navigator.mediaCapabilities.decodingInfo = (config) => {
+        return Promise.resolve({
+          supported: true,
+          smooth: true,
+          powerEfficient: true,
+        });
+      };
+    }
+
+    // ============================================================
+    // 15. Hilangkan properti AutomationControlled dari Chrome
+    // ============================================================
+    if (window.chrome) {
+      // Hapus properti khas automation seperti 'loadTimes', 'csi'
+      if (window.chrome.loadTimes) {
+        try { delete window.chrome.loadTimes; } catch (_) {}
+      }
+      if (window.chrome.csi) {
+        try { delete window.chrome.csi; } catch (_) {}
+      }
+    }
+  });
+}
+
+/**
  * Helper: Upload gambar referensi ke halaman Gemini menggunakan
  * Playwright file chooser event.
  *
@@ -747,40 +988,120 @@ async function checkGeminiLogin() {
   try {
     const userDataDir = path.join(process.cwd(), '.gemini-browser-profile');
 
+    const vp = randomViewport();
+
     context = await chromium.launchPersistentContext(userDataDir, {
       headless: true,
+      userAgent: EDGE_UA,  // Edge UA lebih jarang diblokir
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--mute-audio',
       ],
-      viewport: { width: 1280, height: 800 },
+      viewport: vp,
       locale: 'id-ID',
+      timezoneId: randomTimezone(),
+      deviceScaleFactor: 1,
+      hasTouch: false,
+      isMobile: false,
     });
+
+    await applyStealthEvasions(context);
 
     const page = await context.newPage();
 
-    console.log('[Gemini] Check login: Buka https://gemini.google.com/app ...');
-    await page.goto('https://gemini.google.com/app', {
-      waitUntil: 'domcontentloaded',
-      timeout: 25000,
-    });
-    await page.waitForTimeout(6000);
+    console.log(`[Gemini] Check login: Buka https://gemini.google.com (viewport ${vp.width}x${vp.height})...`);
 
-    const loginCheck = await evaluateLoginFromPage(page);
+    // Coba dengan timeout lebih panjang dan fallback URL
+    let loginCheck = null;
+    let usedUrl = 'https://gemini.google.com/app';
 
-    console.log('[Gemini] Login check result:', JSON.stringify(loginCheck, null, 2));
+    for (const targetUrl of ['https://gemini.google.com/app', 'https://gemini.google.com/', 'https://aistudio.google.com/app']) {
+      try {
+        console.log(`[Gemini] Mencoba: ${targetUrl}`);
+        await page.goto(targetUrl, {
+          waitUntil: 'load',
+          timeout: 25000,
+        });
+        await page.waitForTimeout(4000);
 
+        // Cek apakah halaman berhasil dimuat (bukan blocked/error)
+        const pageUrl = page.url();
+        const bodySnippet = await page.evaluate(() => document.body.innerText.substring(0, 500)).catch(() => '');
+        const isBlocked = /something went wrong|try again later|access denied|403|forbidden|please try again later|this page isn't working|error 429/i.test(bodySnippet);
+        const isRateLimited = /rate limit|too many requests|429|quota exceeded|try again/i.test(bodySnippet) && bodySnippet.length < 1000;
+        const isGoogleAuth = pageUrl.includes('accounts.google.com');
+
+        console.log(`[Gemini] URL: ${pageUrl} | Blocked: ${isBlocked} | RateLimit: ${isRateLimited} | Auth: ${isGoogleAuth}`);
+
+        // Jika rate limit, langsung return tanpa coba URL lain
+        if (isRateLimited) {
+          console.log('[Gemini] RATE LIMIT terdeteksi, hentikan percobaan.');
+          await context.close();
+          context = null;
+          return {
+            loggedIn: false,
+            isRateLimited: true,
+            detail: '⚠️ Limit akses tercapai! Google membatasi karena terlalu banyak permintaan otomatis. Tunggu 5-10 menit, lalu coba lagi.',
+            error: 'Rate limited oleh Google',
+          };
+        }
+
+        if (!isBlocked) {
+          loginCheck = await evaluateLoginFromPage(page);
+          usedUrl = targetUrl;
+          if (loginCheck) break;
+        } else {
+          console.log(`[Gemini] ${targetUrl} diblokir, coba URL lain...`);
+        }
+      } catch (navErr) {
+        console.log(`[Gemini] Navigasi ke ${targetUrl} gagal: ${navErr.message}`);
+        continue;
+      }
+    }
+
+    if (loginCheck) {
+      console.log('[Gemini] Login check result:', JSON.stringify(loginCheck, null, 2));
+
+      await context.close();
+      context = null;
+
+      return {
+        loggedIn: loginCheck.isLoggedIn,
+        detail: loginCheck.isLoggedIn
+          ? 'Anda sudah login ke Gemini.'
+          : 'Anda belum login ke Gemini. Silakan klik tombol "Buka Gemini untuk Login" di dashboard.',
+      };
+    }
+
+    // Ambil snippet halaman SEBELUM context ditutup
+    const lastSnippet = await page.evaluate(() => document.body.innerText.substring(0, 500)).catch(() => '');
+
+    // Tutup browser
     await context.close();
     context = null;
 
+    // Deteksi rate limit dari snippet
+    const detectedRateLimit = /rate limit|too many requests|429|quota exceeded|try again later/i.test(lastSnippet);
+
+    if (detectedRateLimit) {
+      return {
+        loggedIn: false,
+        isRateLimited: true,
+        detail: '⚠️ Limit akses tercapai! Google membatasi karena terlalu banyak permintaan otomatis. Tunggu 5-10 menit, buka Gemini di browser biasa untuk login ulang, lalu coba lagi.',
+        error: 'Rate limited oleh Google — terlalu banyak request',
+      };
+    }
+
     return {
-      loggedIn: loginCheck.isLoggedIn,
-      detail: loginCheck.isLoggedIn
-        ? 'Anda sudah login ke Gemini.'
-        : 'Anda belum login ke Gemini. Silakan klik tombol "Buka Gemini untuk Login" di dashboard.',
-      loginScore: loginCheck.loginScore,
-      chatScore: loginCheck.chatScore,
+      loggedIn: false,
+      isBlockedByGoogle: true,
+      detail: 'Tidak dapat mengakses Gemini. Google memblokir akses otomatis. Silakan buka gemini.google.com di browser biasa untuk login, tutup, lalu coba lagi.',
+      error: 'Semua URL Gemini gagal diakses (blocked oleh Google)',
     };
 
   } catch (err) {
@@ -790,7 +1111,7 @@ async function checkGeminiLogin() {
     }
     return {
       loggedIn: false,
-      detail: `Gagal mengecek login: ${err.message}`,
+      detail: `Gagal mengecek login: ${err.message}. Silakan login manual di browser biasa.`,
       error: err.message,
     };
   }
@@ -824,30 +1145,39 @@ app.post('/api/open-gemini', async (req, res) => {
   try {
     const userDataDir = path.join(process.cwd(), '.gemini-browser-profile');
 
+    const vp = randomViewport();
+
     console.log('[Gemini] Membuka Gemini AI di browser visible...');
     context = await chromium.launchPersistentContext(userDataDir, {
       headless: false,
+      userAgent: CHROME_UA,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--mute-audio',
       ],
-      viewport: { width: 1280, height: 800 },
+      viewport: vp,
       locale: 'id-ID',
+      timezoneId: randomTimezone(),
+      deviceScaleFactor: 1,
+      hasTouch: false,
+      isMobile: false,
     });
 
-    await context.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    });
+    await applyStealthEvasions(context);
 
     const page = await context.newPage();
 
-    console.log('[Gemini] Navigasi ke https://gemini.google.com/app ...');
+    console.log(`[Gemini] Navigasi ke https://gemini.google.com/app (viewport ${vp.width}x${vp.height})...`);
     await page.goto('https://gemini.google.com/app', {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000,
+      waitUntil: 'load',
+      timeout: 60000,
     });
-    await page.waitForTimeout(8000);
+    await page.waitForTimeout(5000);
 
     if (referenceImage) {
       await uploadReferenceImage(page, referenceImage);
@@ -887,30 +1217,65 @@ app.post('/api/analyze-image-gemini', async (req, res) => {
   try {
     const userDataDir = path.join(process.cwd(), '.gemini-browser-profile');
 
+    const vp = randomViewport();
+
     console.log('[Gemini] Membuka Gemini AI (auto-analyze mode)...');
     context = await chromium.launchPersistentContext(userDataDir, {
       headless: false,
+      userAgent: CHROME_UA,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--mute-audio',
       ],
-      viewport: { width: 1280, height: 900 },
+      viewport: vp,
       locale: 'id-ID',
+      timezoneId: randomTimezone(),
+      deviceScaleFactor: 1,
+      hasTouch: false,
+      isMobile: false,
     });
 
-    await context.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    });
+    await applyStealthEvasions(context);
 
     const page = await context.newPage();
 
-    console.log('[Gemini] Navigasi ke https://gemini.google.com/app ...');
+    console.log(`[Gemini] Navigasi ke https://gemini.google.com/app (viewport ${vp.width}x${vp.height})...`);
     await page.goto('https://gemini.google.com/app', {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000,
+      waitUntil: 'load',
+      timeout: 60000,
     });
-    await page.waitForTimeout(8000);
+    await page.waitForTimeout(5000);
+
+    // Cek apakah halaman error (blocked/detected) — cek URL juga
+    const pageUrl = page.url();
+    const errorCheck = await page.evaluate(() => {
+      const bodyText = document.body.innerText.substring(0, 500);
+      return {
+        isErrorPage: /something went wrong|try again later|access denied|403|forbidden/i.test(bodyText),
+        snippet: bodyText.substring(0, 200),
+      };
+    });
+
+    console.log('[Gemini] Page URL:', pageUrl, '| Error:', errorCheck.isErrorPage);
+
+    if (errorCheck.isErrorPage || !pageUrl.includes('gemini.google.com')) {
+      console.log('[Gemini] TERDETEKSI ERROR/REDIRECT:', errorCheck.snippet);
+      await context.close();
+      context = null;
+      return res.json({
+        success: false,
+        isBlockedByGoogle: true,
+        error: 'Google memblokir akses otomatis. Silakan buka Gemini secara manual di browser biasa untuk login, lalu coba lagi.',
+        detail: errorCheck.snippet,
+      });
+    }
+
+    console.log('[Gemini] Halaman Gemini berhasil dimuat, melanjutkan...');
 
     // Cek status login pakai shared evaluator
     const loginCheck = await evaluateLoginFromPage(page);
@@ -924,8 +1289,9 @@ app.post('/api/analyze-image-gemini', async (req, res) => {
         success: false,
         isLoginRequired: true,
         loginDetail: {
-          loginScore: loginCheck.loginScore,
-          chatScore: loginCheck.chatScore,
+          hasChatInput: loginCheck.hasChatInput,
+          hasLoginButton: loginCheck.hasLoginButton,
+          pageUrl: loginCheck.pageUrl,
         },
         error: 'Anda belum login ke Gemini. Silakan buka Gemini, login dulu, lalu coba lagi.',
       });

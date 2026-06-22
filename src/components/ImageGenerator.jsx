@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Image, Sparkles, Copy, Trash2, ExternalLink, Upload, Plus, RefreshCw } from 'lucide-react';
-import { generateImagePrompts } from '../services/gemini';
+import { generateSingleImagePrompt, analyzeImageWithGeminiAPI } from '../services/gemini';
 
 export default function ImageGenerator() {
   const [prompts, setPrompts] = useState([]);
@@ -21,27 +21,24 @@ export default function ImageGenerator() {
   const [analyzingImage, setAnalyzingImage] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
   const [showContext, setShowContext] = useState(false);
-  const [geminiLoginStatus, setGeminiLoginStatus] = useState(null); // null | 'checking' | 'logged_in' | 'not_logged_in'
-  const [geminiLoginMsg, setGeminiLoginMsg] = useState('');
-  const [openingGeminiLogin, setOpeningGeminiLogin] = useState(false);
   const fileInputRef = useRef(null);
-  const isLoginCheckingRef = useRef(false);
 
-  // Load saved context on mount
+  // Clear any auto-loading on mount to guarantee clean state
   useEffect(() => {
-    // Load hook result
+    // Start completely clean as requested
+  }, []);
+
+  // Manual import from other studios when requested
+  const handleImportFromStudios = () => {
     const savedHooks = localStorage.getItem('bgi_hooks_result');
     if (savedHooks) setHookText(savedHooks);
 
-    // Load script from Script Builder
     const savedScript = localStorage.getItem('bgi_active_script');
     if (savedScript) setScriptText(savedScript);
 
-    // Load caption from Caption Craft
     const savedCaption = localStorage.getItem('bgi_caption_result');
     if (savedCaption) setCaptionText(savedCaption);
 
-    // Load active idea
     const savedIdeas = localStorage.getItem('bgi_generated_ideas');
     const savedActiveIdx = localStorage.getItem('bgi_active_idea_idx');
     if (savedIdeas && savedActiveIdx !== null) {
@@ -56,40 +53,18 @@ export default function ImageGenerator() {
       } catch (e) {}
     }
 
-    // Also load platform/format from active settings
     const savedPlatform = localStorage.getItem('bgi_active_platform');
     if (savedPlatform) setPlatform(savedPlatform);
     const savedFormat = localStorage.getItem('bgi_active_format');
     if (savedFormat) setContentFormat(savedFormat);
 
-    // Show context panel if there's data
     if (savedScript || savedCaption || savedHooks) {
       setShowContext(true);
     }
 
-    // Auto-check Gemini login status on mount
-    const autoCheckLogin = async () => {
-      if (isLoginCheckingRef.current) return;
-      isLoginCheckingRef.current = true;
-      try {
-        const res = await fetch('/api/check-gemini-login');
-        const data = await res.json();
-        if (data.success && data.loggedIn) {
-          setGeminiLoginStatus('logged_in');
-          setGeminiLoginMsg('✓ Sudah login ke Gemini');
-        } else {
-          setGeminiLoginStatus('not_logged_in');
-          setGeminiLoginMsg(data.detail || 'Belum login ke Gemini');
-        }
-      } catch (_) {
-        setGeminiLoginStatus('not_logged_in');
-        setGeminiLoginMsg('Gagal mengecek login. Pastikan server backend berjalan (node server/scraper.mjs).');
-      } finally {
-        isLoginCheckingRef.current = false;
-      }
-    };
-    autoCheckLogin();
-  }, []);
+    setStatus('Data berhasil di-import dari studio lain!');
+    setTimeout(() => setStatus(''), 3000);
+  };
 
   // Get brand profile from localStorage
   const getBrandProfile = () => ({
@@ -102,7 +77,7 @@ export default function ImageGenerator() {
     segmentations: localStorage.getItem('bgi_brand_segments') || '',
   });
 
-  // Parse hooks into image prompts using Gemini API (with full context)
+  // Parse hooks into image prompts using Gemini API sequentially (slide-by-slide for consistency)
   const handleParseFromHooks = async () => {
     if (!hookText.trim()) {
       setError('Tidak ada teks hook yang tersedia. Silakan generate hook terlebih dahulu di Hook Studio.');
@@ -111,46 +86,56 @@ export default function ImageGenerator() {
 
     setLoading(true);
     setError('');
-    setStatus('Menganalisis seluruh konteks (hook, script, caption) dan membuat prompt gambar detail...');
+    setPrompts([]); // Clear old prompts so they load step by step!
+
+    const brandProfile = getBrandProfile();
+    const generated = [];
 
     try {
-      const brandProfile = getBrandProfile();
-      const result = await generateImagePrompts({
-        hookText: hookText.trim(),
-        scriptText: scriptText.trim(),
-        captionText: captionText.trim(),
-        ideaTitle: ideaTitle.trim(),
-        platform,
-        format: contentFormat,
-        slideCount,
-        brandProfile,
-      });
+      for (let i = 1; i <= slideCount; i++) {
+        setStatus(`Sedang membuat prompt gambar untuk Slide ${i} dari ${slideCount}...`);
+        
+        const result = await generateSingleImagePrompt({
+          slideNumber: i,
+          totalSlides: slideCount,
+          hookText: hookText.trim(),
+          scriptText: scriptText.trim(),
+          captionText: captionText.trim(),
+          ideaTitle: ideaTitle.trim(),
+          platform,
+          format: contentFormat,
+          brandProfile,
+          previousPrompts: generated, // Pass the already generated prompts
+          referenceImage: referenceImage || null, // Pass reference image style guidelines if uploaded
+        });
 
-      if (Array.isArray(result) && result.length > 0) {
-        const newPrompts = result.map((item, idx) => ({
-          id: Date.now() + idx,
-          text: item.prompt || item.text || '',
-          slide: item.slide || idx + 1,
-          hook: item.hook || '',
-          visualStyle: item.visualStyle || '',
-          status: 'ready',
-        }));
-        setPrompts(prev => [...prev, ...newPrompts]);
-        
-        const contextUsed = [
-          scriptText.trim() && 'Script',
-          captionText.trim() && 'Caption',
-          ideaTitle.trim() && 'Ide Konten',
-        ].filter(Boolean);
-        
-        const contextMsg = contextUsed.length > 0 
-          ? ` (menggunakan konteks: ${contextUsed.join(', ')})` 
-          : '';
-        
-        setStatus(`${newPrompts.length} prompt gambar detail berhasil dibuat${contextMsg}!`);
-      } else {
-        setError('AI tidak menghasilkan prompt gambar. Coba lagi atau input manual.');
+        if (result && result.prompt) {
+          const newPrompt = {
+            id: Date.now() + i,
+            text: result.prompt,
+            slide: result.slide || i,
+            hook: result.hook || '',
+            visualStyle: result.visualStyle || '',
+            status: 'ready',
+          };
+          generated.push(result);
+          setPrompts(prev => [...prev, newPrompt]);
+        } else {
+          throw new Error(`Gagal menghasilkan prompt untuk Slide ${i}.`);
+        }
       }
+      
+      const contextUsed = [
+        scriptText.trim() && 'Script',
+        captionText.trim() && 'Caption',
+        ideaTitle.trim() && 'Ide Konten',
+      ].filter(Boolean);
+      
+      const contextMsg = contextUsed.length > 0 
+        ? ` (menggunakan konteks: ${contextUsed.join(', ')})` 
+        : '';
+        
+      setStatus(`Semua ${slideCount} prompt gambar detail berhasil dibuat secara konsisten${contextMsg}!`);
     } catch (err) {
       setError(err.message || 'Gagal membuat prompt gambar dari hook.');
     } finally {
@@ -210,109 +195,34 @@ export default function ImageGenerator() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  // Check Gemini login status
-  const handleCheckGeminiLogin = async () => {
-    if (isLoginCheckingRef.current) return;
-    isLoginCheckingRef.current = true;
 
-    setGeminiLoginStatus('checking');
-    setGeminiLoginMsg('Memeriksa status login Gemini...');
-    setError('');
-
-    try {
-      const response = await fetch('/api/check-gemini-login');
-      const data = await response.json();
-
-      if (data.success && data.loggedIn) {
-        setGeminiLoginStatus('logged_in');
-        setGeminiLoginMsg('✓ Anda sudah login ke Gemini!');
-      } else {
-        setGeminiLoginStatus('not_logged_in');
-        setGeminiLoginMsg(data.detail || data.error || 'Anda belum login ke Gemini.');
-      }
-    } catch (err) {
-      setGeminiLoginStatus('not_logged_in');
-      setGeminiLoginMsg('Gagal terhubung ke server backend. Pastikan server scraper berjalan: node server/scraper.mjs');
-      setError('Pastikan server scraper berjalan: node server/scraper.mjs');
-    } finally {
-      isLoginCheckingRef.current = false;
-    }
-  };
-
-  // Open Gemini browser for login
-  const handleOpenGeminiForLogin = async () => {
-    setOpeningGeminiLogin(true);
-    setError('');
-    setStatus('Membuka browser Gemini untuk login...');
-
-    try {
-      const response = await fetch('/api/open-gemini', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: 'Hi',
-        }),
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        setStatus('Browser Gemini terbuka! Silakan login dengan akun Google Anda, lalu klik "Saya sudah login" setelah selesai.');
-      } else {
-        setError(data.error || 'Gagal membuka Gemini.');
-      }
-    } catch (err) {
-      setError('Gagal membuka browser. Pastikan server scraper berjalan.');
-    } finally {
-      setOpeningGeminiLogin(false);
-    }
-  };
-
-  // Analyze reference image with Gemini Web (Playwright)
+  // Analyze reference image using Gemini API directly
   const handleAnalyzeWithGemini = async () => {
     if (!referenceImage) {
       setError('Tidak ada gambar referensi yang diupload.');
       return;
     }
 
-    // Cek login dulu jika belum pernah dicek
-    if (geminiLoginStatus !== 'logged_in') {
-      try {
-        setStatus('Memeriksa status login Gemini...');
-        const checkRes = await fetch('/api/check-gemini-login');
-        const checkData = await checkRes.json();
-
-        if (!checkData.success || !checkData.loggedIn) {
-          setGeminiLoginStatus('not_logged_in');
-          setGeminiLoginMsg('Anda harus login ke Gemini dulu sebelum menggunakan fitur ini.');
-          setError('Anda belum login ke Gemini. Klik tombol "Buka Gemini untuk Login" di bawah.');
-          return;
-        }
-        setGeminiLoginStatus('logged_in');
-      } catch (err) {
-        setError('Gagal memeriksa login. Pastikan server backend berjalan.');
-        return;
-      }
+    if (!hookText.trim() && !ideaTitle.trim() && !scriptText.trim()) {
+      setError('Teks Hook, Judul Ide Konten, atau Script tidak boleh kosong. Silakan isi terlebih dahulu agar AI dapat menghubungkan gaya gambar dengan topik konten Anda.');
+      return;
     }
 
     setAnalyzingImage(true);
     setError('');
-    setStatus('Membuka Gemini Web dan mengupload gambar referensi untuk analisis... Ini membutuhkan waktu sekitar 30-60 detik.');
+    setStatus('Menganalisis gambar menggunakan Gemini API langsung... Mohon tunggu.');
 
     try {
-      const response = await fetch('/api/analyze-image-gemini', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          referenceImage,
-          contextInfo: [
-            hookText.trim() ? `Hook: ${hookText.trim().substring(0, 200)}` : '',
-            ideaTitle.trim() ? `Idea Title: ${ideaTitle.trim()}` : '',
-          ].filter(Boolean).join('\n'),
-        }),
+      const brandProfile = getBrandProfile();
+      const data = await analyzeImageWithGeminiAPI({
+        referenceImage,
+        hookText: hookText.trim(),
+        scriptText: scriptText.trim(),
+        captionText: captionText.trim(),
+        ideaTitle: ideaTitle.trim(),
+        brandProfile,
+        format: contentFormat,
       });
-
-      const data = await response.json();
 
       if (data.success) {
         const megaPrompt = data.megaPrompt || data.response;
@@ -335,50 +245,59 @@ export default function ImageGenerator() {
         });
 
         setStatus('Analisis selesai! Prompt rekomendasi dari Gemini telah ditambahkan ke daftar.');
-      } else if (data.isLoginRequired) {
-        // Login terdeteksi expired di tengah proses
-        setGeminiLoginStatus('not_logged_in');
-        setGeminiLoginMsg('Sesi login Anda telah berakhir. Silakan login ulang.');
-        setError(data.error || 'Sesi login berakhir. Klik "Buka Gemini untuk Login" untuk login ulang.');
       } else {
-        setError(data.error || 'Gagal menganalisis gambar. Pastikan server backend berjalan (node server/scraper.mjs).');
+        setError('Gagal menganalisis gambar. Silakan periksa kembali API Key Anda.');
       }
     } catch (err) {
-      setError('Gagal terhubung ke server backend. Pastikan server scraper berjalan: node server/scraper.mjs');
+      setError(`Gagal menganalisis gambar: ${err.message}`);
     } finally {
       setAnalyzingImage(false);
       setTimeout(() => setStatus(''), 5000);
     }
   };
 
-  // Open Gemini with a specific prompt
+  // Open Gemini in standard browser securely and copy prompt
   const handleOpenGemini = async (promptText, promptId) => {
     setOpeningPromptId(promptId);
-    setStatus('Membuka browser Gemini... Mohon tunggu.');
+    setStatus('Menyalin prompt dan membuka Gemini...');
     setError('');
 
     try {
-      const response = await fetch('http://localhost:3001/api/open-gemini', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: promptText,
-          referenceImage: referenceImage || undefined,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        setStatus('Browser Gemini terbuka! Silakan klik Generate di browser.');
-      } else {
-        setError(data.error || 'Gagal membuka Gemini.');
-      }
+      // Copy to clipboard
+      await navigator.clipboard.writeText(promptText);
+      
+      // Open in new tab securely
+      window.open('https://gemini.google.com/app', '_blank', 'noopener,noreferrer');
+      
+      setStatus('Prompt berhasil disalin ke clipboard! Tab Gemini telah terbuka. Silakan tempel (Paste/Ctrl+V) prompt di sana.');
     } catch (err) {
-      setError('Server scraper belum berjalankan. Silakan jalankan di terminal: node server/scraper.mjs');
+      setError(`Gagal memproses: ${err.message}`);
     } finally {
       setOpeningPromptId(null);
-      setTimeout(() => setStatus(''), 5000);
+      setTimeout(() => setStatus(''), 6000);
+    }
+  };
+
+  // Open ChatGPT in standard browser and prefill query parameter + copy to clipboard
+  const handleOpenChatGPT = async (promptText, promptId) => {
+    setOpeningPromptId(promptId);
+    setStatus('Menyalin prompt dan membuka ChatGPT...');
+    setError('');
+
+    try {
+      // Copy to clipboard
+      await navigator.clipboard.writeText(promptText);
+      
+      // Open in new tab securely with query param
+      const chatgptUrl = `https://chatgpt.com/?q=${encodeURIComponent(promptText)}`;
+      window.open(chatgptUrl, '_blank', 'noopener,noreferrer');
+      
+      setStatus('Prompt berhasil disalin ke clipboard dan dimuat di ChatGPT!');
+    } catch (err) {
+      setError(`Gagal memproses: ${err.message}`);
+    } finally {
+      setOpeningPromptId(null);
+      setTimeout(() => setStatus(''), 6000);
     }
   };
 
@@ -405,6 +324,14 @@ export default function ImageGenerator() {
           <h1>Image Studio</h1>
           <p>Buat prompt gambar dari hook atau input manual, lalu buka Gemini untuk generate image satu per satu.</p>
         </div>
+        <button
+          type="button"
+          onClick={handleImportFromStudios}
+          className="btn btn-outline"
+          style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
+        >
+          <span>📋 Import Data dari Studio</span>
+        </button>
       </div>
 
       <div className="grid-2" style={{ gridTemplateColumns: '0.9fr 1.1fr' }}>
@@ -421,7 +348,7 @@ export default function ImageGenerator() {
               value={hookText}
               onChange={(e) => setHookText(e.target.value)}
               placeholder="Tempel teks hook dari Hook Studio di sini, atau biarkan otomatis terisi..."
-              style={{ minHeight: '160px', fontSize: '0.85rem' }}
+              style={{ minHeight: '220px', fontSize: '0.85rem' }}
             />
           </div>
 
@@ -539,7 +466,7 @@ export default function ImageGenerator() {
                     value={scriptText}
                     onChange={(e) => setScriptText(e.target.value)}
                     placeholder="Draf naskah konten akan otomatis terisi dari Script Builder..."
-                    style={{ minHeight: '140px', fontSize: '0.8rem', fontFamily: 'monospace' }}
+                    style={{ minHeight: '200px', fontSize: '0.85rem', fontFamily: 'monospace' }}
                   />
                 </div>
 
@@ -554,7 +481,7 @@ export default function ImageGenerator() {
                     value={captionText}
                     onChange={(e) => setCaptionText(e.target.value)}
                     placeholder="Caption akan otomatis terisi dari Caption Craft..."
-                    style={{ minHeight: '120px', fontSize: '0.8rem' }}
+                    style={{ minHeight: '180px', fontSize: '0.85rem' }}
                   />
                 </div>
 
@@ -575,7 +502,7 @@ export default function ImageGenerator() {
                 value={newPrompt}
                 onChange={(e) => setNewPrompt(e.target.value)}
                 placeholder="Ketik prompt gambar manual, contoh: 'Flat illustration of a student reading a book at a cafe, warm tones, minimal style'"
-                style={{ minHeight: '60px', flex: 1, fontSize: '0.85rem' }}
+                style={{ minHeight: '180px', flex: 1, fontSize: '0.85rem' }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
@@ -638,17 +565,8 @@ export default function ImageGenerator() {
                       {analyzingImage ? (
                         <><div className="loading-spinner"></div> Menganalisis...</>
                       ) : (
-                        <><Sparkles size={14} /> Analisis dengan Gemini Web</>
+                        <><Sparkles size={14} /> Analisis dengan Gemini</>
                       )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); handleCheckGeminiLogin(); }}
-                      className="btn btn-outline"
-                      disabled={geminiLoginStatus === 'checking'}
-                      style={{ padding: '0.3rem 0.6rem', fontSize: '0.7rem' }}
-                    >
-                      {geminiLoginStatus === 'checking' ? 'Memeriksa...' : '🔑 Cek Login Gemini'}
                     </button>
                     <button
                       type="button"
@@ -659,40 +577,6 @@ export default function ImageGenerator() {
                       <Trash2 size={12} /> Hapus
                     </button>
                   </div>
-                  {/* Login Status Indicator */}
-                  {geminiLoginStatus && (
-                    <div style={{
-                      fontSize: '0.72rem',
-                      padding: '0.4rem 0.7rem',
-                      borderRadius: '8px',
-                      width: '100%',
-                      textAlign: 'center',
-                      background: geminiLoginStatus === 'logged_in'
-                        ? 'rgba(52, 211, 153, 0.1)'
-                        : geminiLoginStatus === 'checking'
-                          ? 'rgba(251, 191, 36, 0.1)'
-                          : 'rgba(239, 68, 68, 0.08)',
-                      border: geminiLoginStatus === 'logged_in'
-                        ? '1px solid rgba(52, 211, 153, 0.2)'
-                        : geminiLoginStatus === 'checking'
-                          ? '1px solid rgba(251, 191, 36, 0.2)'
-                          : '1px solid rgba(239, 68, 68, 0.15)',
-                      color: geminiLoginStatus === 'logged_in'
-                        ? '#34d399'
-                        : geminiLoginStatus === 'checking'
-                          ? '#fbbf24'
-                          : '#f87171',
-                    }}>
-                      {geminiLoginStatus === 'logged_in' ? (
-                        '✓ Sudah login ke Gemini'
-                      ) : geminiLoginStatus === 'checking' ? (
-                        'Memeriksa status login...'
-                      ) : (
-                        <span>{geminiLoginMsg || 'Belum login ke Gemini'}</span>
-                      )}
-                    </div>
-                  )}
-
                 </div>
               ) : (
                 <div style={{ color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
@@ -704,55 +588,8 @@ export default function ImageGenerator() {
             </div>
             {referenceImagePreview && !analyzingImage && (
               <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic', marginTop: '0.5rem', lineHeight: '1.4' }}>
-                💡 Klik "Analisis dengan Gemini Web" untuk membuka Gemini AI, upload gambar, 
-                dan mendapatkan rekomendasi prompt gambar mega-detail secara otomatis.
-              </div>
-            )}
-
-            {/* Login Guide (tampil kapanpun jika belum login) */}
-            {geminiLoginStatus === 'not_logged_in' && (
-              <div style={{
-                fontSize: '0.75rem',
-                padding: '0.75rem',
-                borderRadius: '8px',
-                width: '100%',
-                marginTop: '0.5rem',
-                background: 'rgba(251, 191, 36, 0.08)',
-                border: '1px solid rgba(251, 191, 36, 0.2)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.5rem',
-                alignItems: 'center',
-              }}>
-                <span style={{ color: '#fbbf24', fontWeight: '600' }}>
-                  ⚠️ Login ke Gemini Diperlukan
-                </span>
-                <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', textAlign: 'center', lineHeight: '1.4' }}>
-                  Fitur analisis gambar membutuhkan akses ke Gemini Web.
-                  Klik tombol di bawah untuk membuka browser, lalu login dengan akun Google Anda.
-                </span>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleOpenGeminiForLogin(); }}
-                    className="btn btn-primary"
-                    disabled={openingGeminiLogin}
-                    style={{ padding: '0.4rem 1rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
-                  >
-                    {openingGeminiLogin ? (
-                      <><div className="loading-spinner"></div> Membuka...</>
-                    ) : (
-                      <><ExternalLink size={14} /> Buka Gemini untuk Login</>
-                    )}
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleCheckGeminiLogin(); }}
-                    className="btn btn-outline"
-                    disabled={geminiLoginStatus === 'checking'}
-                    style={{ padding: '0.4rem 1rem', fontSize: '0.8rem' }}
-                  >
-                    {geminiLoginStatus === 'checking' ? 'Memeriksa...' : '✓ Saya sudah login'}
-                  </button>
-                </div>
+                💡 Klik "Analisis dengan Gemini" untuk mendeteksi gaya visual, subjek, setting, 
+                dan menyusun rekomendasi prompt gambar mega-detail secara instan menggunakan API Key Anda.
               </div>
             )}
           </div>
@@ -920,7 +757,7 @@ export default function ImageGenerator() {
                     value={item.text}
                     onChange={(e) => handleEditPrompt(item.id, e.target.value)}
                     style={{
-                      minHeight: '60px',
+                      minHeight: '280px',
                       fontSize: '0.85rem',
                       background: 'transparent',
                       border: '1px solid transparent',
@@ -931,28 +768,52 @@ export default function ImageGenerator() {
                     onBlur={(e) => e.target.style.borderColor = 'transparent'}
                   />
 
-                  <button
-                    onClick={() => handleOpenGemini(item.text, item.id)}
-                    className="btn btn-primary"
-                    disabled={openingPromptId === item.id}
-                    style={{
-                      width: '100%',
-                      marginTop: '0.5rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '0.4rem',
-                      fontSize: '0.85rem',
-                      padding: '0.5rem 1rem',
-                      opacity: openingPromptId === item.id ? 0.6 : 1,
-                    }}
-                  >
-                    {openingPromptId === item.id ? (
-                      <><div className="loading-spinner"></div> Membuka...</>
-                    ) : (
-                      <><ExternalLink size={14} /> Buka di Gemini & Generate</>
-                    )}
-                  </button>
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                    <button
+                      onClick={() => handleOpenGemini(item.text, item.id)}
+                      className="btn btn-primary"
+                      disabled={openingPromptId === item.id}
+                      style={{
+                        flex: 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '0.4rem',
+                        fontSize: '0.85rem',
+                        padding: '0.5rem 0.75rem',
+                        opacity: openingPromptId === item.id ? 0.6 : 1,
+                      }}
+                      title="Buka di Gemini (Paste manual)"
+                    >
+                      {openingPromptId === item.id ? (
+                        <><div className="loading-spinner"></div></>
+                      ) : (
+                        <><ExternalLink size={14} /> Gemini</>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => handleOpenChatGPT(item.text, item.id)}
+                      className="btn btn-secondary"
+                      disabled={openingPromptId === item.id}
+                      style={{
+                        flex: 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '0.4rem',
+                        fontSize: '0.85rem',
+                        padding: '0.5rem 0.75rem',
+                        opacity: openingPromptId === item.id ? 0.6 : 1,
+                      }}
+                      title="Buka di ChatGPT (Terisi otomatis)"
+                    >
+                      {openingPromptId === item.id ? (
+                        <><div className="loading-spinner"></div></>
+                      ) : (
+                        <><ExternalLink size={14} /> ChatGPT</>
+                      )}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -978,7 +839,7 @@ export default function ImageGenerator() {
               marginTop: '0.75rem',
             }}>
               <RefreshCw size={14} style={{ flexShrink: 0, marginTop: '1px' }} />
-              <span>Klik "Buka di Gemini" pada setiap prompt untuk membuka browser Gemini. Upload gambar referensi akan otomatis terkirim jika sudah diunggah. Setelah prompt masuk, klik tombol <strong>Generate</strong> di browser Gemini secara manual.</span>
+              <span>Klik <strong>Gemini</strong> atau <strong>ChatGPT</strong> untuk meluncurkan AI. Prompt akan otomatis disalin ke clipboard Anda. Di ChatGPT, prompt akan langsung terisi secara otomatis di kolom input. Di Gemini, Anda cukup melakukan penempelan manual (Paste / Ctrl+V).</span>
             </div>
           )}
         </div>

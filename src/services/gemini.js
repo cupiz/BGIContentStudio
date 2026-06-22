@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Gemini API Client Service for BGI Content Studio
  */
 
@@ -629,6 +629,329 @@ PASTIKAN:
     console.warn('Failed to parse image prompts JSON:', responseText, e);
     return [];
   }
+}
+
+/**
+ * Generate a single detailed image prompt for a specific slide while maintaining consistency with previous slides.
+ */
+export async function generateSingleImagePrompt({
+  slideNumber,
+  totalSlides,
+  hookText,
+  scriptText = '',
+  captionText = '',
+  ideaTitle = '',
+  platform = 'Instagram',
+  format = 'Carousel',
+  brandProfile,
+  previousPrompts = [],
+  referenceImage = null
+}) {
+  const formatLower = (format || '').toLowerCase();
+  const aspectInstruction = (formatLower.includes('carousel') || formatLower.includes('single image') || formatLower.includes('post'))
+    ? `COMPOSITION & ASPECT RATIO REQUIREMENT (STRICT):
+- You MUST specify a SQUARE (1:1) or VERTICAL (4:5) composition.
+- Strictly AVOID landscape format, horizontal rectangular framing, wide-angle panoramic views, or 16:9 ratio. All visual elements, subjects, and text overlays must fit perfectly within a square or tall vertical layout.`
+    : (formatLower.includes('reels') || formatLower.includes('tiktok') || formatLower.includes('shorts') || formatLower.includes('story') || formatLower.includes('stories'))
+      ? `COMPOSITION & ASPECT RATIO REQUIREMENT (STRICT):
+- You MUST specify a VERTICAL PORTRAIT (9:16) composition.
+- Strictly AVOID landscape, horizontal framing, or 1:1 square layouts. The scene must be tall and narrow.`
+      : `COMPOSITION & ASPECT RATIO REQUIREMENT:
+- Adapt the framing and layout to fit the selected format: "${format}". Avoid horizontal landscape framing if the format is intended for mobile vertical/square viewing.`;
+
+  const systemInstruction = `Anda adalah AI Image Prompt Engineer dan Content Visual Director ahli untuk konten media sosial.
+
+Tugas Anda adalah menghasilkan prompt gambar yang SANGAT DETAIL, SPESIFIK, dan MEGA PROMPT untuk Slide ${slideNumber} dari total ${totalSlides} slide.
+
+${aspectInstruction}
+
+${referenceImage ? `PENTING - GAYA GAMBAR REFERENSI:
+Kami menyediakan GAMBAR REFERENSI untuk memandu gaya visual.
+TUGAS UTAMA ANDA:
+1. Analisis gaya visual (art style, palet warna, lighting, art direction, layout visual, rendering style, tekstur, detail ilustrasi) dari gambar referensi yang disediakan.
+2. Terapkan gaya artistik tersebut secara KETAT untuk menggambarkan konten Slide ${slideNumber}.
+3. CRITICAL: JANGAN mendeskripsikan subjek atau objek dari gambar referensi secara literal. Hanya gunakan gaya visualnya (gaya gambarnya).
+   - E.g., jika gambar referensi menampilkan "kucing di atas meja", tetapi konten Slide ${slideNumber} adalah tentang "manajemen waktu", prompt Anda harus menggambarkan "manajemen waktu" (misal: jam pasir, kalender, orang yang fokus bekerja) dengan gaya visual/ilustrasi yang persis sama dengan gambar referensi. JANGAN menyertakan kucing atau meja jika tidak relevan dengan topik slide!` : ''}
+
+PENTING - UNTUK MENJAGA KONSISTENSI VISUAL:
+Jika ada slide sebelumnya, Anda HARUS mempertahankan gaya visual, karakter (termasuk deskripsi fisik, ekspresi wajah, pakaian, pose), palet warna dominan, latar belakang, dan pencahayaan yang sama dengan slide-slide sebelumnya.
+Gunakan deskripsi detail dari slide-slide sebelumnya sebagai referensi ketat agar seluruh slide membentuk satu rangkaian visual (carousel) yang konsisten dan menyatu secara visual.
+
+PEDOMAN PROMPT ENGINEERING (MEGA PROMPT):
+1. Tulis prompt dalam BAHASA INGGRIS secara detail (minimal 100-150 kata).
+2. Tentukan:
+   - Visual Style & Art Direction: (Pilih salah satu dan pertahankan konsisten: Flat Illustration, Modern Minimalist, Photographic/Realistic, Infographic Style, 3D Isometric, Neon/Dark Mode, dll.)
+   - Subject/Character: Deskripsi fisik detail (rambut, pakaian, ekspresi wajah, pose).
+   - Composition & Angle: Kamera angle, rule of thirds, depth of field.
+   - Lighting & Color: Warna dominan, jenis pencahayaan, suasana.
+   - Text Overlay: Tuliskan teks bahasa Indonesia yang muncul di gambar dengan jelas dan lengkap, dibungkus tanda kutip.
+3. Jangan gunakan kata-kata generik. Berikan detail konkret.
+
+Respon harus berupa JSON objek murni tanpa markdown code block.
+Format output JSON yang WAJIB diikuti:
+{
+  "slide": ${slideNumber},
+  "hook": "ringkasan isi/tujuan slide ini",
+  "visualStyle": "gaya visual yang dipilih",
+  "prompt": "[tulis prompt bahasa Inggris super detail minimal 100 kata di sini]"
+}`;
+
+  let prompt = `
+Saya akan membuat KONTEN MEDIA SOSIAL dengan detail berikut:
+📌 JUDUL IDE KONTEN:
+${ideaTitle || '(Tidak ada)'}
+📱 PLATFORM & FORMAT:
+- Platform: ${platform}
+- Format: ${format}
+- Jumlah Slide/Gambar yang Dibutuhkan: ${totalSlides}
+🎯 TEKS HOOK:
+"""
+${hookText || '(Tidak ada)'}
+"""
+📝 DRAF NASKAH SCRIPT:
+"""
+${scriptText || '(Tidak ada)'}
+"""
+💬 CAPTION POSTINGAN:
+"""
+${captionText || '(Tidak ada)'}
+"""
+🏷️ BRAND CONTEXT:
+- Niche: ${brandProfile?.niche || 'Umum'}
+- Positioning: ${brandProfile?.positioning || ''}
+- Target Audiens: ${brandProfile?.targetAudience || 'Umum'}
+- Tone of Voice: ${brandProfile?.toneOfVoice || 'Friendly'}
+
+TUGAS ANDA:
+Hasilkan MEGA PROMPT gambar detail untuk Slide ${slideNumber} dari total ${totalSlides}.
+`;
+
+  if (previousPrompts && previousPrompts.length > 0) {
+    prompt += `
+Berikut adalah prompt yang sudah digenerate untuk slide-slide sebelumnya. Anda WAJIB menjaga konsistensi gaya visual, karakter, latar belakang, warna, dan atmosfer dengan ini:
+${previousPrompts.map(p => `Slide ${p.slide}:
+- Gaya Visual: ${p.visualStyle}
+- Ringkasan/Hook: ${p.hook}
+- Prompt Detail: ${p.prompt}`).join('\n\n')}
+`;
+  }
+
+  const apiKey = localStorage.getItem('bgi_gemini_api_key');
+  let model = localStorage.getItem('bgi_gemini_model') || 'gemini-2.5-flash';
+
+  if (!apiKey) {
+    throw new Error('API Key Gemini belum diatur. Silakan pergi ke menu Pengaturan untuk mengisinya.');
+  }
+
+  // Enforce rate limit check before hitting the API
+  await enforceRateLimits();
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/chat/completions`;
+
+  const messages = [];
+  if (systemInstruction) {
+    messages.push({
+      role: 'system',
+      content: systemInstruction
+    });
+  }
+
+  const userContent = [
+    {
+      type: 'text',
+      text: prompt
+    }
+  ];
+
+  if (referenceImage) {
+    userContent.push({
+      type: 'image_url',
+      image_url: {
+        url: referenceImage
+      }
+    });
+  }
+
+  messages.push({
+    role: 'user',
+    content: userContent
+  });
+
+  const requestBody = {
+    model: model,
+    messages: messages,
+    temperature: 0.7,
+    max_tokens: 4096
+  };
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = errorData?.error?.message || `HTTP error! status: ${response.status}`;
+    throw new Error(errorMessage);
+  }
+
+  const data = await response.json();
+  const responseText = data.choices?.[0]?.message?.content;
+  
+  if (!responseText) {
+    throw new Error('Tidak ada respon dari Gemini API.');
+  }
+
+  try {
+    return parseJsonResponse(responseText);
+  } catch (e) {
+    console.warn(`Failed to parse image prompt JSON for slide ${slideNumber}:`, responseText, e);
+    return {
+      slide: slideNumber,
+      hook: `Slide ${slideNumber} description`,
+      visualStyle: previousPrompts[0]?.visualStyle || 'flat illustration',
+      prompt: `Detailed flat illustration of slide ${slideNumber} with consistent visual style and elements.`
+    };
+  }
+}
+
+/**
+ * Analyze reference image in extreme detail using Gemini API and return a recommended mega-detailed prompt.
+ */
+export async function analyzeImageWithGeminiAPI({ 
+  referenceImage, 
+  hookText = '', 
+  scriptText = '', 
+  captionText = '', 
+  ideaTitle = '', 
+  brandProfile = null,
+  format = '',
+  contextInfo = '', 
+  customInstruction = '' 
+}) {
+  const apiKey = localStorage.getItem('bgi_gemini_api_key');
+  let model = localStorage.getItem('bgi_gemini_model') || 'gemini-2.5-flash';
+  
+  // For safety, force a Gemini model if another type of model is selected
+  if (!model.startsWith('gemini')) {
+    model = 'gemini-2.5-flash';
+  }
+
+  if (!apiKey) {
+    throw new Error('API Key Gemini belum diatur. Silakan pergi ke menu Pengaturan untuk mengisinya.');
+  }
+
+  // Enforce rate limit check before hitting the API
+  await enforceRateLimits();
+
+  const formatLower = (format || '').toLowerCase();
+  const aspectInstruction = (formatLower.includes('carousel') || formatLower.includes('single image') || formatLower.includes('post'))
+    ? `COMPOSITION & ASPECT RATIO REQUIREMENT (STRICT):
+- You MUST specify a SQUARE (1:1) or VERTICAL (4:5) composition in the mega prompt.
+- Strictly AVOID landscape format, horizontal rectangular framing, wide-angle panoramic views, or 16:9 ratio. All visual elements, subjects, and text overlays must fit perfectly within a square or tall vertical layout.`
+    : (formatLower.includes('reels') || formatLower.includes('tiktok') || formatLower.includes('shorts') || formatLower.includes('story') || formatLower.includes('stories'))
+      ? `COMPOSITION & ASPECT RATIO REQUIREMENT (STRICT):
+- You MUST specify a VERTICAL PORTRAIT (9:16) composition in the mega prompt.
+- Strictly AVOID landscape, horizontal framing, or 1:1 square layouts. The scene must be tall and narrow.`
+      : `COMPOSITION & ASPECT RATIO REQUIREMENT:
+- Adapt the framing and layout to fit the selected format: "${format}". Avoid horizontal landscape framing if the format is intended for mobile vertical/square viewing.`;
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/chat/completions`;
+
+  const analysisPrompt = customInstruction ||
+`IMPORTANT: You are a visual style translator.
+Your task is to analyze the VISUAL STYLE (art style, art direction, color palette, lighting, character style, composition, and aesthetic design patterns) of the provided reference image, and then APPLY THAT STYLE to generate a prompt for OUR content topic.
+
+${aspectInstruction}
+
+CRITICAL RULE: DO NOT copy or describe the semantic subject or objects of the reference image.
+- E.g., if the reference image shows a "woman meditating by a lake", but our topic is "software development", the generated prompt MUST NOT show a woman meditating or a lake. Instead, it should show a scene related to software development (e.g., a modern computer setup, a programmer at work) rendered in the EXACT art style, color theme, lighting, and composition pattern of the reference image.
+
+Our Content Topic Context:
+- Idea Title: ${ideaTitle || '(None)'}
+- Hook Text (Slide 1 Main Text): "${hookText || ''}"
+- Script: "${scriptText || ''}"
+- Caption: "${captionText || ''}"
+- Brand Niche: ${brandProfile?.niche || 'General'}
+${contextInfo ? `- Additional Context: ${contextInfo}` : ''}
+
+Format your response as:
+
+## VISUAL ANALYSIS
+[Extract and describe the visual style, art direction, color palette, lighting, character style, and aesthetic design patterns of the reference image. Write this analysis in INDONESIAN]
+
+## MEGA PROMPT RECOMMENDATION
+[Create a detailed, high-quality image generation prompt in ENGLISH (minimum 150 words) for Slide 1 (the Visual Hook) of our topic. It must describe a scene visualizing our Hook text / topic, but styled and colored exactly like the reference image following the visual rules analyzed above. Ensure it does NOT copy the semantic content/subjects of the reference image, but ONLY copies its design style/patterns.]`;
+
+  const requestBody = {
+    model: model,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: analysisPrompt
+          },
+          {
+            type: 'image_url',
+            image_url: {
+              url: referenceImage // base64 data URL
+            }
+          }
+        ]
+      }
+    ],
+    temperature: 0.5,
+    max_tokens: 4096
+  };
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = errorData?.error?.message || `HTTP error! status: ${response.status}`;
+    throw new Error(errorMessage);
+  }
+
+  const data = await response.json();
+  const responseText = data.choices?.[0]?.message?.content;
+  
+  if (!responseText) {
+    throw new Error('Tidak ada respon dari Gemini API.');
+  }
+
+  // Parse response to separate analysis and prompt
+  let analysis = responseText;
+  let megaPrompt = responseText;
+
+  const megaPromptMatch = responseText.match(/## MEGA PROMPT RECOMMENDATION\s*([\s\S]*)/i);
+  const visualAnalysisMatch = responseText.match(/## VISUAL ANALYSIS\s*([\s\S]*?)(?=## MEGA PROMPT)/i);
+
+  if (megaPromptMatch) {
+    megaPrompt = megaPromptMatch[1].trim();
+  }
+  if (visualAnalysisMatch) {
+    analysis = visualAnalysisMatch[1].trim();
+  }
+
+  return {
+    success: true,
+    response: responseText,
+    analysis: analysis,
+    megaPrompt: megaPrompt,
+  };
 }
 
 /**
