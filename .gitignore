@@ -29,3 +29,6 @@ server/debug_profile.png
 
 # IDE and tool configuration
 .claude/
+
+# Browser profile untuk Playwright (besar, tidak perlu di-commit)
+.gemini-browser-profile/

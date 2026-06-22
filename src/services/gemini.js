@@ -497,6 +497,141 @@ Lengkapi seluruh profil strategis brand dengan kriteria sebagai berikut:
 }
 
 /**
+ * Generate image prompts from full content context (hooks, script, caption, idea)
+ * One prompt per carousel slide / visual scene
+ */
+export async function generateImagePrompts({ 
+  hookText, 
+  scriptText = '', 
+  captionText = '', 
+  ideaTitle = '', 
+  platform = 'Instagram', 
+  format = 'Carousel',
+  slideCount = 5, 
+  brandProfile 
+}) {
+  const systemInstruction = `Anda adalah AI Image Prompt Engineer dan Content Visual Director ahli untuk konten media sosial. 
+
+Tugas Anda adalah menganalisis SELURUH konteks konten (hook, script naskah, caption, judul ide, platform, format) dan menghasilkan ${slideCount} prompt gambar yang SANGAT DETAIL, SPESIFIK, dan SALING TERKAIT satu sama lain untuk membentuk satu rangkaian visual carousel yang utuh.
+
+PEDOMAN PROMPT ENGINEERING:
+1. Setiap prompt harus menggambarkan SATU SLIDE/SCENE yang spesifik — seolah-olah Anda adalah sutradara yang memberi arahan ke ilustrator/desainer.
+2. Sertakan detail: komposisi layout, palet warna dominan, tipografi/teks yang muncul, props/objek, ekspresi karakter, angle/perspektif, pencahayaan, dan mood.
+3. Pastikan ada ALUR VISUAL yang jelas dari Slide 1 hingga Slide ${slideCount}: pembuka (hook visual) → isi (edukasi/value) → penutup (CTA).
+4. Prompt harus dalam bahasa INGGRIS (Gemini image generator bekerja optimal dengan English prompts).
+5. JANGAN gunakan teks Indonesia dalam prompt — hanya bahasa Inggris.
+6. Gaya visual harus KONSISTEN di semua slide (pilih SALAH SATU gaya yang paling cocok dengan konten).
+
+PENTING: Respon HARUS berupa JSON array murni tanpa teks penjelasan. Langsung keluarkan JSON array.
+
+Contoh format output:
+[{"slide": 1, "hook": "ringkasan hook", "visualStyle": "flat illustration", "prompt": "[deskripsi scene sangat detail dalam bahasa Inggris]"}, {"slide": 2, "hook": "...", "visualStyle": "flat illustration", "prompt": "..."}]
+
+GAYA VISUAL yang bisa dipilih (pilih 1 yang paling KONSISTEN untuk semua slide):
+- Flat Illustration: Ilustrasi 2D datar dengan warna-warna solid, modern, cocok untuk edukasi
+- Modern Minimalist: Desain minimalis dengan ruang negatif luas, tipografi besar, warna monokrom
+- Photographic/Realistic: Gaya foto realistis dengan pencahayaan natural, depth of field
+- Infographic Style: Diagram, ikon, grafik, data visual dengan layout terstruktur
+- 3D Isometric: Ilustrasi 3D isometrik dengan perspektif miring, modern dan playful
+- Watercolor/Artistic: Gaya cat air atau sketsa tangan artistik, warm dan emosional
+- Neon/Dark Mode: Latar gelap dengan aksen neon, cocok untuk konten modern/tech
+- Pastel Soft: Palet pastel lembut, cocok untuk konten lifestyle/wellness`;
+
+  const prompt = `
+Saya akan membuat KONTEN MEDIA SOSIAL dengan detail berikut:
+
+---
+📌 JUDUL IDE KONTEN:
+${ideaTitle || '(Tidak ada judul)'}
+
+📱 PLATFORM & FORMAT:
+- Platform: ${platform}
+- Format: ${format}
+- Jumlah Slide/Gambar yang Dibutuhkan: ${slideCount}
+
+---
+🎯 TEKS HOOK (Pembuka Konten):
+"""
+${hookText || '(Tidak ada hook)'}
+"""
+
+---
+📝 DRAF NASKAH SCRIPT:
+"""
+${scriptText || '(Tidak ada script)'}
+"""
+
+---
+💬 CAPTION POSTINGAN:
+"""
+${captionText || '(Tidak ada caption)'}
+"""
+
+---
+🏷️ BRAND CONTEXT:
+- Niche: ${brandProfile?.niche || 'Umum'}
+- Positioning: ${brandProfile?.positioning || ''}
+- Target Audiens: ${brandProfile?.targetAudience || 'Umum'}
+- Tone of Voice: ${brandProfile?.toneOfVoice || 'Friendly'}
+- Segmentasi: ${brandProfile?.segmentations || ''}
+
+---
+
+TUGAS ANDA:
+
+Analisis SELURUH konteks di atas secara mendalam. Pahami:
+- Apa pesan utama konten ini?
+- Siapa target audiensnya?
+- Bagaimana alur storytellling dari hook → isi → CTA?
+- Poin-poin edukasi/value apa yang harus divisualisasikan?
+
+Kemudian buatkan **${slideCount} prompt gambar** yang membentuk SATU KESATUAN RANGKAIAN CAROUSEL/VISUAL yang utuh dengan alur:
+
+📐 STRUKTUR SLIDE YANG DIREKOMENDASIKAN:
+1. **Slide 1 (Hook Visual)**: Tangkap perhatian — visual yang kuat, provokatif, atau emosional sesuai hook. Sertakan teks hook sebagai overlay.
+2. **Slide 2 hingga ${slideCount-1} (Isi/Edukasi)**: Visualisasikan poin-poin utama dari script/naskah. Buat setiap slide informatif dengan teks pendukung.
+3. **Slide ${slideCount} (CTA/Penutup)**: Call to action visual — ajak audiens untuk like, komen, share, atau klik link di bio.
+
+UNTUK SETIAP PROMPT, sertakan detail berikut:
+- 🎨 **Gaya visual** (konsisten untuk semua slide)
+- 👤 **Karakter** (deskripsi fisik, ekspresi wajah, usia, pakaian, pose)
+- 🎬 **Aksi** (apa yang dilakukan karakter atau elemen utama)
+- 📍 **Latar/Lokasi** (setting, background, lingkungan)
+- 💡 **Pencahayaan & Mood** (warna dominan, atmosfer, pencahayaan)
+- 📝 **Teks Overlay** (teks yang muncul di gambar — TULISKAN SECARA LENGKAP dalam bahasa Indonesia sesuai konteks)
+- 🖼️ **Komposisi** (layout, angle, perspektif, rule of thirds)
+- 🎯 **Fokus Emosi** (emosi apa yang ingin dibangkitkan: surprise, trust, curiosity, dll)
+
+Kembalikan HANYA JSON array valid dengan format:
+[
+  {
+    "slide": 1,
+    "hook": "Ringkasan hook yang menjadi inspirasi slide ini",
+    "visualStyle": "[pilih 1 gaya yang sama untuk semua slide]",
+    "prompt": "[PROMPT BAHASA INGGRIS sangat detail — minimal 50 kata — mencakup semua elemen visual, karakter, latar, pencahayaan, teks overlay, komposisi, dan mood]"
+  },
+  ...
+]
+
+PASTIKAN:
+✓ Prompt dalam bahasa INGGRIS
+✓ Minimal 50 kata per prompt
+✓ Sangat detail dan spesifik (bukan generik)
+✓ Gaya visual konsisten di semua slide
+✓ Ada alur naratif visual yang jelas dari slide 1 ke slide ${slideCount}
+✓ Teks overlay ditulis LENGKAP dalam bahasa Indonesia
+✓ Sesuai dengan tone of voice brand (${brandProfile?.toneOfVoice || 'Friendly'})`;
+
+  const responseText = await generateWithGemini(prompt, systemInstruction);
+  try {
+    return parseJsonResponse(responseText);
+  } catch (e) {
+    console.warn('Failed to parse image prompts JSON:', responseText, e);
+    return [];
+  }
+}
+
+/**
  * Scrape Instagram account info & determine primary niche.
  * 
  * Strategi (berurutan):

@@ -422,3 +422,57 @@
   max-height: 350px;
   overflow-y: auto;
 }
+
+/* Image Studio Styles */
+.image-generator-container {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.image-upload-zone {
+  border: 2px dashed var(--border-color);
+  border-radius: 12px;
+  padding: 1.5rem;
+  text-align: center;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  background: rgba(255,255,255,0.01);
+}
+
+.image-upload-zone:hover {
+  border-color: var(--primary);
+  background: rgba(99,102,241,0.03);
+}
+
+.image-upload-zone.dragging {
+  border-color: var(--primary);
+  background: rgba(99,102,241,0.08);
+}
+
+.prompt-card {
+  background: rgba(0,0,0,0.25);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 1rem;
+  transition: all var(--transition-fast);
+}
+
+.prompt-card:hover {
+  border-color: rgba(99,102,241,0.3);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+.prompt-card .hook-label {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  font-style: italic;
+  margin-left: 0.5rem;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}

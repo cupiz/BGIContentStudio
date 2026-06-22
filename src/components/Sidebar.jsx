@@ -5,6 +5,7 @@ import {
   FileText, 
   Zap, 
   MessageSquare, 
+  Image, 
   Settings as SettingsIcon 
 } from 'lucide-react';
 
@@ -17,6 +18,7 @@ export default function Sidebar({ activeTab, setActiveTab }) {
     { id: 'scripts', name: 'Script Builder', icon: FileText },
     { id: 'hooks', name: 'Hook Studio', icon: Zap },
     { id: 'captions', name: 'Caption Craft', icon: MessageSquare },
+    { id: 'images', name: 'Image Studio', icon: Image },
     { id: 'settings', name: 'Settings', icon: SettingsIcon },
   ];
 

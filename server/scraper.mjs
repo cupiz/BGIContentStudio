@@ -6,49 +6,436 @@
 import express from 'express';
 import cors from 'cors';
 import { chromium } from 'playwright';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 
 const app = express();
-const PORT = 3001;
+const DEFAULT_PORT = 3001;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '200mb' }));
+app.use(express.urlencoded({ limit: '200mb', extended: true }));
+
+// Increase Node.js HTTP server max body size
+app.use((req, res, next) => {
+  req.setTimeout(120000);
+  next();
+});
 
 /**
- * Tutup popup/overlay Instagram
+ * Helper: Coba listen ke port, jika EADDRINUSE coba port berikutnya.
+ * Langsung pakai app.listen() — tidak ada TOCTOU race condition.
  */
-async function dismissPopups(page) {
-  const dismissSelectors = [
-    'button:has-text("Not Now")',
-    'button:has-text("Tidak Sekarang")',
-    'button:has-text("Not now")',
-    '[aria-label="Close"]',
-    '[aria-label="Tutup"]',
-    'button:has-text("Dismiss")',
-    'button:has-text("Close")',
-    'button:has-text("Cancel")',
-  ];
+async function startServer(port, maxAttempts = 20) {
+  return new Promise((resolve, reject) => {
+    const srv = app.listen(port, '0.0.0.0', () => resolve({ srv, port }));
+    srv.on('error', (err) => {
+      if (err.code === 'EADDRINUSE' && maxAttempts > 0) {
+        srv.close(() => {
+          console.log(`  Port ${port} sibuk, coba ${port + 1}...`);
+          resolve(startServer(port + 1, maxAttempts - 1));
+        });
+      } else {
+        reject(err);
+      }
+    });
+  });
+}
 
-  for (let attempt = 0; attempt < 3; attempt++) {
-    for (const sel of dismissSelectors) {
+/**
+ * Helper: Upload gambar referensi ke halaman Gemini menggunakan
+ * Playwright file chooser event.
+ *
+ * Alur upload Gemini web (observasi 2025):
+ *   1. Klik tombol "+" (Add) di input chat
+ *   2. Muncul popup menu dengan opsi "Upload file"
+ *   3. Klik "Upload file" -> file chooser muncul
+ *   4. Pilih file
+ *
+ * Strategi (berurutan):
+ *   A. Cek input[type="file"] langsung (setInputFiles)
+ *   B. File chooser via popup menu — setup 1 listener, klik trigger, klik opsi upload
+ *   C. Klik setiap elemen interaktif di area input (dari DOM scan) dan cek file chooser
+ */
+async function uploadReferenceImage(page, referenceImage) {
+  console.log('[Gemini] Mengupload gambar referensi...');
+
+  const tempFile = path.join(os.tmpdir(), `gemini_ref_${Date.now()}.png`);
+  const base64Data = referenceImage.replace(/^data:image\/\w+;base64,/, '');
+  fs.writeFileSync(tempFile, Buffer.from(base64Data, 'base64'));
+
+  let uploadSucceeded = false;
+
+  try {
+    // ===== DEBUG: Screenshot + DOM inspection =====
+    try {
+      await page.screenshot({ path: path.join(os.tmpdir(), 'gemini_before_upload.png') });
+    } catch (_) {}
+
+    // Pindai DOM untuk cari elemen interaktif di area bawah (area chat Gemini)
+    const domScan = await page.evaluate(() => {
+      const viewportH = window.innerHeight;
+      const allInteractive = document.querySelectorAll(
+        'button, div[role="button"], input[type="file"], [contenteditable="true"], ' +
+        'a[href], label, [tabindex]:not([tabindex="-1"])'
+      );
+      return Array.from(allInteractive)
+        .filter(el => {
+          const r = el.getBoundingClientRect();
+          return r.top < viewportH && r.bottom > viewportH * 0.5 && el.offsetParent !== null;
+        })
+        .slice(0, 30)
+        .map(el => ({
+          tag: el.tagName,
+          type: el.getAttribute('type') || '',
+          text: (el.textContent || '').trim().substring(0, 80),
+          aria: el.getAttribute('aria-label') || '',
+          placeholder: el.getAttribute('placeholder') || '',
+          role: el.getAttribute('role') || '',
+          classes: (el.className || '').substring(0, 80),
+          rect: (() => {
+            const r = el.getBoundingClientRect();
+            return { x: ~~r.x, y: ~~r.y, w: ~~r.width, h: ~~r.height };
+          })(),
+        }))
+        .filter(el => el.text || el.aria || el.type === 'file');
+    });
+
+    console.log(`[Gemini] DOM scan: ${domScan.length} elemen interaktif di area input:`);
+    for (const el of domScan) {
+      console.log(`  <${el.tag}> type="${el.type}" text="${el.text.substring(0, 50)}" aria="${el.aria}"`);
+    }
+
+    // ===== STRATEGI A: setInputFiles langsung (paling cepat) =====
+    console.log('[Gemini] Strategy A: Cek input[type=file] langsung...');
+    const fileInputs = page.locator('input[type="file"]');
+    const inputCount = await fileInputs.count();
+    if (inputCount > 0) {
+      console.log(`[Gemini] Ditemukan ${inputCount} input[type=file], set langsung...`);
+      try {
+        await fileInputs.first().setInputFiles(tempFile);
+        await page.waitForTimeout(3000);
+        console.log('[Gemini] Strategy A berhasil!');
+        uploadSucceeded = true;
+        return;
+      } catch (setErr) {
+        console.warn('[Gemini] Strategy A gagal:', setErr.message);
+      }
+    } else {
+      console.log('[Gemini] Tidak ada input[type=file] langsung.');
+    }
+
+    // ===== STRATEGI B: File chooser via popup menu =====
+    console.log('[Gemini] Strategy B: File chooser via popup menu...');
+    let fileChooserResolved = false;
+
+    // Satu file chooser listener untuk seluruh Strategy B (45s timeout)
+    const fileChooserPromise = page.waitForEvent('filechooser', { timeout: 45000 })
+      .then(fc => { fileChooserResolved = true; return fc; })
+      .catch(() => null);
+
+    const triggerSelectors = [
+      'button[aria-label*="Add" i]',
+      'button[aria-label*="add file" i]',
+      'button[aria-label*="Attach" i]',
+      'button[aria-label*="upload" i]',
+      'button[aria-label*="image" i]',
+      'div[role="button"][aria-label*="Add" i]',
+      'div[role="button"][aria-label*="attach" i]',
+      'button:has-text("+")',
+      // Tambahkan dari DOM scan
+      ...domScan
+        .filter(el => /add|upload|attach|plus|file|gambar|image/i.test(el.text + el.aria))
+        .map(el => `${el.tag.toLowerCase()}:has-text("${el.text.substring(0, 30)}")`),
+    ];
+
+    // Cari tombol trigger ("+" / "Add" / "Upload")
+    for (const sel of [...new Set(triggerSelectors)]) {
+      if (fileChooserResolved) break;
       try {
         const btn = page.locator(sel).first();
-        const isVisible = await btn.isVisible({ timeout: 500 });
-        if (isVisible) {
-          console.log(`[Scraper] Menutup popup: ${sel}`);
+        if (await btn.isVisible({ timeout: 500 }).catch(() => false)) {
+          console.log(`[Gemini] Klik trigger: ${sel}`);
           await btn.click();
           await page.waitForTimeout(800);
+          if (fileChooserResolved) break; // file chooser langsung muncul
+
+          // Popup menu muncul — cari opsi "Upload file"
+          console.log('[Gemini] Cari opsi "Upload file" di popup menu...');
+          await page.waitForTimeout(600);
+
+          const uploadOptionSelectors = [
+            'span:has-text("Upload file")',
+            'div:has-text("Upload file")',
+            'span:has-text("Upload")',
+            'div:has-text("Upload")',
+            'button:has-text("Upload")',
+            'li:has-text("Upload")',
+            '[role="menuitem"]:has-text("Upload")',
+            '[role="option"]:has-text("Upload")',
+            'div[role="button"]:has-text("Upload")',
+            'span:has-text("unggah")',
+            'span:has-text("File")',
+            'a:has-text("Upload")',
+            'a:has-text("unggah")',
+          ];
+
+          for (const opt of [...new Set(uploadOptionSelectors)]) {
+            if (fileChooserResolved) break;
+            try {
+              const option = page.locator(opt).first();
+              if (await option.isVisible({ timeout: 300 }).catch(() => false)) {
+                console.log(`[Gemini] Klik opsi upload: ${opt}`);
+                await option.click();
+                await page.waitForTimeout(800);
+                if (fileChooserResolved) break;
+              }
+            } catch (_) {}
+          }
+
+          // Fallback: klik item pertama di popup
+          if (!fileChooserResolved) {
+            try {
+              const popupItems = page.locator('[role="menu"] [role="menuitem"], [role="listbox"] [role="option"], [class*="menu"] [role="button"], [class*="popup"] button');
+              if (await popupItems.count() > 0) {
+                console.log('[Gemini] Fallback: klik item pertama popup...');
+                await popupItems.first().click();
+                await page.waitForTimeout(800);
+              }
+            } catch (_) {}
+          }
+          break;
         }
-      } catch (e) {}
+      } catch (_) {}
     }
-    
-    // Escape key juga bantu
-    await page.keyboard.press('Escape');
-    await page.waitForTimeout(500);
+
+    // Tunggu file chooser — maksimal 5 detik setelah interaksi selesai
+    const fileChooser = fileChooserResolved
+      ? await fileChooserPromise
+      : await Promise.race([
+          fileChooserPromise,
+          new Promise(resolve => setTimeout(() => resolve(null), 5000))
+        ]);
+    if (fileChooser) {
+      await fileChooser.setFiles(tempFile);
+      console.log('[Gemini] Strategy B berhasil! File diupload via file chooser.');
+      await page.waitForTimeout(5000);
+      uploadSucceeded = true;
+      return;
+    }
+
+    // ===== STRATEGI C: Klik elemen interaktif satu per satu dengan listener bersama =====
+    console.log('[Gemini] Strategy C: Klik elemen interaktif di area bawah...');
+    const fcPromiseC = page.waitForEvent('filechooser', { timeout: 20000 }).catch(() => null);
+
+    for (const el of domScan) {
+      if (el.rect.w < 10 || el.rect.h < 10) continue;
+      if (el.text === '' && el.aria === '' && el.type !== 'file') continue;
+
+      // Buat selector sederhana
+      const selector = el.tag.toLowerCase() +
+        (el.classes ? `.${el.classes.split(/\s+/)[0].replace(/[^\w-]/g, '')}` : '');
+
+      try {
+        const elem = page.locator(selector).first();
+        if (await elem.isVisible({ timeout: 200 }).catch(() => false)) {
+          console.log(`[Gemini] Klik: <${el.tag}> "${el.text.substring(0, 40)}"`);
+          await elem.click();
+          await page.waitForTimeout(1200);
+
+          // Cek apakah file chooser sudah muncul
+          const fc = await page.waitForEvent('filechooser', { timeout: 500 }).catch(() => null);
+          if (fc) {
+            await fc.setFiles(tempFile);
+            console.log(`[Gemini] Strategy C berhasil via: <${el.tag}> "${el.text.substring(0, 40)}"`);
+            await page.waitForTimeout(4000);
+            uploadSucceeded = true;
+            return;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Tunggu sisa file chooser promise jika masih ada
+    const fcC = await fcPromiseC;
+    if (fcC) {
+      await fcC.setFiles(tempFile);
+      console.log('[Gemini] Strategy C berhasil (late file chooser)!');
+      await page.waitForTimeout(4000);
+      uploadSucceeded = true;
+      return;
+    }
+
+    if (!uploadSucceeded) {
+      console.warn('[Gemini] Semua strategi upload gagal.');
+      // Screenshot akhir untuk debugging
+      try {
+        await page.screenshot({ path: path.join(os.tmpdir(), 'gemini_after_fail.png') });
+        const pageInfo = await page.evaluate(() => ({
+          title: document.title,
+          url: window.location.href,
+          textSnippet: document.body.innerText.substring(0, 500),
+        }));
+        console.log('[Gemini] Page info:', JSON.stringify(pageInfo, null, 2));
+      } catch (ssErr) {
+        console.warn('[Gemini] Gagal ambil debug info:', ssErr.message);
+      }
+    }
+
+  } catch (uploadErr) {
+    console.warn('[Gemini] Fatal error upload:', uploadErr.message);
+  } finally {
+    try { fs.unlinkSync(tempFile); } catch (_) {}
   }
 }
 
 /**
- * Endpoint utama: scrape captions dari profil Instagram
+ * Helper: Tulis teks ke input chat Gemini
+ */
+async function typeToGeminiInput(page, text) {
+  console.log('[Gemini] Memasukkan prompt teks...');
+  const inputSelectors = [
+    '.ql-editor',
+    'div[contenteditable="true"]',
+    'rich-textarea p',
+    'textarea',
+    'div[role="textbox"]',
+    '.text-input-field',
+    'p[data-placeholder]',
+  ];
+
+  let inputFound = false;
+  for (const selector of inputSelectors) {
+    try {
+      const input = page.locator(selector).first();
+      if (await input.isVisible({ timeout: 2000 })) {
+        await input.click();
+        await page.waitForTimeout(400);
+        try {
+          await input.fill(text);
+        } catch (_) {
+          await page.keyboard.type(text, { delay: 3 });
+        }
+        inputFound = true;
+        console.log(`[Gemini] Prompt dimasukkan via: ${selector}`);
+        break;
+      }
+    } catch (_) {}
+  }
+
+  if (!inputFound) {
+    await page.keyboard.press('Tab');
+    await page.waitForTimeout(400);
+    await page.keyboard.type(text, { delay: 3 });
+    console.log('[Gemini] Prompt dimasukkan via keyboard fallback.');
+  }
+}
+
+/**
+ * Helper: Extract the last Gemini response text from the page
+ */
+async function extractGeminiResponse(page) {
+  console.log('[Gemini] Mengekstrak respons...');
+  await page.waitForTimeout(2000);
+
+  const strategies = [
+    // Strategy 1: Look for model response elements
+    () => {
+      return page.evaluate(() => {
+        const selectors = [
+          '[data-message-author="model"]',
+          '.model-response-text',
+          '.response-content',
+          '.gemini-response',
+          '[data-test-id="response-text"]',
+        ];
+        for (const sel of selectors) {
+          const el = document.querySelector(sel);
+          if (el && el.textContent.trim().length > 20) {
+            return el.textContent.trim();
+          }
+        }
+        return null;
+      });
+    },
+    // Strategy 2: Find the last large text block
+    () => {
+      return page.evaluate(() => {
+        const allText = document.body.innerText;
+        const lines = allText.split('\n').filter(l => l.trim().length > 0);
+        const textBlocks = [];
+        let currentBlock = [];
+        for (const line of lines) {
+          if (line.trim().length > 0) {
+            currentBlock.push(line);
+          } else if (currentBlock.length > 0) {
+            textBlocks.push(currentBlock.join('\n'));
+            currentBlock = [];
+          }
+        }
+        if (currentBlock.length > 0) textBlocks.push(currentBlock.join('\n'));
+
+        for (let i = textBlocks.length - 1; i >= 0; i--) {
+          if (textBlocks[i].length > 100) return textBlocks[i];
+        }
+        return null;
+      });
+    },
+    // Strategy 3: Get main content area
+    () => {
+      return page.evaluate(() => {
+        const main = document.querySelector('main') || document.querySelector('[role="main"]');
+        if (main) {
+          const allText = main.textContent.trim();
+          if (allText.length > 50) return allText;
+        }
+        return null;
+      });
+    },
+    // Strategy 4: Last resort - filter out short text blocks
+    () => {
+      return page.evaluate(() => {
+        const allText = document.body.innerText;
+        const lines = allText.split('\n').filter(l => l.trim().length > 0);
+        // Get the last ~50 lines
+        const lastLines = lines.slice(-50);
+        const content = lastLines.join('\n');
+        if (content.length > 100) return content;
+        return null;
+      });
+    },
+  ];
+
+  for (const strategy of strategies) {
+    try {
+      const result = await strategy();
+      if (result && result.length > 50) {
+        // Filter out "login" pages
+        const lower = result.toLowerCase();
+        if (lower.includes('sign in') && lower.includes('google') && result.length < 200) {
+          console.log('[Gemini] Detected login page, skipping...');
+          continue;
+        }
+        console.log(`[Gemini] Berhasil mengekstrak ${result.length} karakter respons.`);
+        return result;
+      }
+    } catch (e) {
+      console.log(`[Gemini] Strategy gagal: ${e.message}`);
+    }
+  }
+
+  // Last resort
+  const fallbackText = await page.evaluate(() => document.body.innerText);
+  if (fallbackText && fallbackText.length > 50) {
+    return fallbackText;
+  }
+
+  throw new Error('Tidak dapat mengekstrak respons dari Gemini web.');
+}
+
+/**
+ * Scrape Instagram profile
  * GET /api/scrape-instagram?username=leaders_id
  */
 app.get('/api/scrape-instagram', async (req, res) => {
@@ -76,9 +463,6 @@ app.get('/api/scrape-instagram', async (req, res) => {
       ]
     });
 
-    // Gunakan emulasi mobile (iPhone 13) untuk mendapatkan layout mobile Instagram
-    // Ini sangat krusial karena layout mobile tidak langsung redirect ke halaman login
-    // dan menyediakan grid post dengan alt text berisi caption lengkap secara langsung.
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
       viewport: { width: 390, height: 844 },
@@ -100,8 +484,8 @@ app.get('/api/scrape-instagram', async (req, res) => {
     console.log(`[Scraper] Navigasi ke profil (Mobile Emulation): ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: 'networkidle', timeout: 30000 });
     await page.waitForTimeout(3000);
-    
-    // Tutup popup banner "Lihat profil lengkap di aplikasi" / "Buka aplikasi"
+
+    // Tutup popup banner
     const closeBtn = page.locator('[aria-label="Tutup"], [aria-label="Close"], svg[aria-label="Tutup"], svg[aria-label="Close"], button:has-text("Tutup"), button:has-text("Close")').first();
     if (await closeBtn.isVisible({ timeout: 1500 }).catch(() => false)) {
       console.log('[Scraper] Menutup banner aplikasi Instagram di mobile...');
@@ -111,41 +495,33 @@ app.get('/api/scrape-instagram', async (req, res) => {
     await page.keyboard.press('Escape');
     await page.waitForTimeout(500);
 
-    // Scroll sedikit ke bawah untuk memastikan seluruh gambar post dimuat
     await page.evaluate(() => window.scrollBy(0, 350));
     await page.waitForTimeout(1500);
-
-    try {
-      await page.screenshot({ path: 'server/debug_profile.png' });
-      console.log('[Scraper] Debug screenshot disimpan ke server/debug_profile.png');
-    } catch (ssErr) {
-      console.log('[Scraper] Gagal mengambil debug screenshot:', ssErr.message);
-    }
 
     const pageTitle = await page.title();
     console.log(`[Scraper] Page title: ${pageTitle}`);
 
-    // Parse nama dan bio menggunakan algoritma parser mobile yang tangguh
+    // Parse nama dan bio
     const headerData = await page.evaluate(() => {
       let fullName = '';
       let bio = '';
-      
+
       const usernameEl = document.querySelector('header h2, h2');
       const username = usernameEl ? usernameEl.innerText.trim() : '';
 
       const spans = Array.from(document.querySelectorAll('header span, main span'));
       const textSpans = spans.map(s => s.innerText.trim()).filter(t => t.length > 0);
-      
+
       const followersIdx = textSpans.findIndex(t => t.includes('follower') || t.includes('Pengikut'));
       if (followersIdx > 0) {
         fullName = textSpans[followersIdx - 1];
       }
-      
+
       const followingIdx = textSpans.findIndex(t => t.includes('following') || t.includes('Mengikuti'));
       const startIdx = Math.max(followersIdx, followingIdx);
       if (startIdx !== -1 && startIdx + 1 < textSpans.length) {
-        const candidates = textSpans.slice(startIdx + 1).filter(t => 
-          !t.toLowerCase().includes('log in') && 
+        const candidates = textSpans.slice(startIdx + 1).filter(t =>
+          !t.toLowerCase().includes('log in') &&
           !t.toLowerCase().includes('sign up') &&
           !t.toLowerCase().includes('buka aplikasi') &&
           !t.toLowerCase().includes('open app') &&
@@ -157,46 +533,40 @@ app.get('/api/scrape-instagram', async (req, res) => {
           bio = candidates.join(' - ');
         }
       }
-      
+
       if (!fullName) {
         fullName = document.querySelector('h1')?.innerText?.trim() || username;
       }
-      
+
       return { fullName, bio };
     });
 
     const fullName = headerData.fullName || `@${cleanUsername}`;
     const bio = headerData.bio || '';
-    console.log(`[Scraper] Terdeteksi Nama: "${fullName}", Bio: "${bio.substring(0, 60)}..."`);
 
-    // Ambil caption dari alt text gambar-gambar postingan
+    // Ambil caption dari alt text
     let captions = await page.evaluate(() => {
       const imgs = Array.from(document.querySelectorAll('img'));
       return imgs
         .map(img => img.alt || '')
-        .filter(alt => 
-          alt && 
-          alt.trim().length > 5 && 
+        .filter(alt =>
+          alt &&
+          alt.trim().length > 5 &&
           !alt.toLowerCase().includes('foto profil') &&
           !alt.toLowerCase().includes('profile picture') &&
           !alt.toLowerCase().includes('instagram')
         );
     });
 
-    console.log(`[Scraper] Berhasil mengekstrak ${captions.length} caption lewat Alt Text.`);
-
-    // Fallback ke parser JSON script jika alt text tidak didapat
+    // Fallback ke parser JSON script
     if (captions.length === 0) {
-      console.log('[Scraper] Fallback: Mencoba metode parser JSON script...');
       const scriptCaptions = await page.evaluate(() => {
         const results = [];
         try {
           const scripts = document.querySelectorAll('script');
           for (const script of scripts) {
             const text = script.textContent || '';
-            if (!text.includes('edge_owner_to_timeline_media') && !text.includes('graphql')) {
-              continue;
-            }
+            if (!text.includes('edge_owner_to_timeline_media') && !text.includes('graphql')) continue;
             let idx = 0;
             while (idx < text.length) {
               const key = '"text":"';
@@ -204,13 +574,9 @@ app.get('/api/scrape-instagram', async (req, res) => {
               if (pos === -1) break;
               let end = pos + key.length;
               while (end < text.length) {
-                if (text[end] === '\\') {
-                  end += 2;
-                } else if (text[end] === '"') {
-                  break;
-                } else {
-                  end++;
-                }
+                if (text[end] === '\\') { end += 2; }
+                else if (text[end] === '"') { break; }
+                else { end++; }
               }
               const extracted = text.substring(pos + key.length, end);
               if (extracted.length > 15) {
@@ -225,22 +591,17 @@ app.get('/api/scrape-instagram', async (req, res) => {
       captions = scriptCaptions.filter(c => c.length > 5);
     }
 
-    // Fallback terakhir: Meta description
+    // Fallback meta description
     if (captions.length === 0) {
-      console.log('[Scraper] Fallback terakhir: Mengambil meta description...');
       const metaDesc = await page.evaluate(() => {
         const meta = document.querySelector('meta[name="description"], meta[property="og:description"]');
         return meta ? meta.getAttribute('content') : '';
       });
-      if (metaDesc) {
-        captions.push(metaDesc);
-      }
+      if (metaDesc) captions.push(metaDesc);
     }
 
     await browser.close();
     browser = null;
-
-    console.log(`[Scraper] Total caption terkumpul: ${captions.length}`);
 
     const uniqueCaptions = [...new Set(captions)]
       .filter(c => c && c.trim().length > 5)
@@ -282,12 +643,446 @@ app.get('/api/scrape-instagram', async (req, res) => {
   }
 });
 
+/**
+ * Shared function: Evaluasi login status dari page yang sudah terbuka.
+ * Menggunakan deterministic checks, bukan scoring.
+ *
+ * Logika:
+ *   1. Jika ada contenteditable/rich-textarea → PASTI login (chat interface)
+ *   2. Jika ada tombol Login/Masuk/Sign in yang VISIBLE → PASTI belum login
+ *   3. Jika URL mengandung accounts.google.com → PASTI belum login
+ *   4. Fallback: cek title, body length, dan teks spesifik
+ */
+async function evaluateLoginFromPage(page) {
+  const pageUrl = page.url();
+
+  const loginCheck = await page.evaluate(() => {
+    const bodyText = document.body.innerText;
+    const title = document.title || '';
+
+    // Helper: cari visible element dengan teks tertentu (innerText, bukan textContent — biar SVG/icon tidak ikut)
+    const hasVisibleText = (texts) => {
+      return Array.from(document.querySelectorAll('button, a, span, div[role="button"]')).some(el => {
+        if (el.offsetParent === null) return false;
+        const text = el.innerText.trim();
+        return texts.some(t => text.toLowerCase() === t.toLowerCase() || text.toLowerCase().includes(t.toLowerCase()));
+      });
+    };
+
+    // ===== DETERMINISTIC CHECK 1: Chat interface =====
+    const hasChatInput = !!(
+      document.querySelector('[contenteditable="true"]') ||
+      document.querySelector('rich-textarea') ||
+      document.querySelector('div[role="textbox"][contenteditable]')
+    );
+
+    // ===== DETERMINISTIC CHECK 2: Login button visible =====
+    const hasLoginButton = hasVisibleText(['login', 'masuk', 'sign in', 'log in', 'sign in with google']);
+
+    // ===== DETERMINISTIC CHECK 3: New chat button (indikator sudah login) =====
+    const hasNewChatButton = hasVisibleText(['new chat', 'new', 'chat baru']);
+
+    // ===== FALLBACK HEURISTICS =====
+    const isShortPage = bodyText.length < 600;
+    const mentionsGoogleOnly = /google/i.test(bodyText) && !/gemini/i.test(bodyText);
+    const isLoginTitle = /sign in|login|masuk/i.test(title);
+    const hasGeminiInBody = /gemini/i.test(bodyText);
+
+    return {
+      hasChatInput,
+      hasLoginButton,
+      hasNewChatButton,
+      hasGeminiInBody,
+      isShortPage,
+      mentionsGoogleOnly,
+      isLoginTitle,
+      bodyLength: bodyText.length,
+      title,
+      snippet: bodyText.substring(0, 300),
+    };
+  });
+
+  // ===== KEPUTUSAN FINAL (prioritas: login button > chat input > URL > heuristics) =====
+  let isLoggedIn;
+
+  if (loginCheck.hasLoginButton) {
+    // Tombol login visible → PASTI belum login
+    // (bisa jadi ada chat input di belakang login overlay)
+    isLoggedIn = false;
+  } else if (loginCheck.hasChatInput && !loginCheck.hasLoginButton) {
+    // Chat input ada dan tidak ada tombol login → PASTI sudah login
+    isLoggedIn = true;
+  } else if (/accounts\.google\.com/i.test(pageUrl)) {
+    // Redirect ke Google Accounts → PASTI belum login
+    isLoggedIn = false;
+  } else {
+    // Fallback: heuristics
+    if (loginCheck.hasNewChatButton && loginCheck.hasGeminiInBody) {
+      isLoggedIn = true;
+    } else if (loginCheck.isLoginTitle || loginCheck.mentionsGoogleOnly) {
+      isLoggedIn = false;
+    } else if (loginCheck.isShortPage) {
+      isLoggedIn = false;
+    } else {
+      isLoggedIn = false;
+    }
+  }
+
+  console.log('[Gemini] Login eval:', JSON.stringify({ ...loginCheck, pageUrl, isLoggedIn }, null, 2));
+
+  return {
+    isLoggedIn,
+    pageUrl,
+    ...loginCheck,
+  };
+}
+
+/**
+ * Helper: Cek apakah user sudah login ke Gemini
+ * Buka https://gemini.google.com/app (headless), deteksi elemen login.
+ * Returns { loggedIn: boolean, detail: string }
+ */
+async function checkGeminiLogin() {
+  let context = null;
+  try {
+    const userDataDir = path.join(process.cwd(), '.gemini-browser-profile');
+
+    context = await chromium.launchPersistentContext(userDataDir, {
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+      ],
+      viewport: { width: 1280, height: 800 },
+      locale: 'id-ID',
+    });
+
+    const page = await context.newPage();
+
+    console.log('[Gemini] Check login: Buka https://gemini.google.com/app ...');
+    await page.goto('https://gemini.google.com/app', {
+      waitUntil: 'domcontentloaded',
+      timeout: 25000,
+    });
+    await page.waitForTimeout(6000);
+
+    const loginCheck = await evaluateLoginFromPage(page);
+
+    console.log('[Gemini] Login check result:', JSON.stringify(loginCheck, null, 2));
+
+    await context.close();
+    context = null;
+
+    return {
+      loggedIn: loginCheck.isLoggedIn,
+      detail: loginCheck.isLoggedIn
+        ? 'Anda sudah login ke Gemini.'
+        : 'Anda belum login ke Gemini. Silakan klik tombol "Buka Gemini untuk Login" di dashboard.',
+      loginScore: loginCheck.loginScore,
+      chatScore: loginCheck.chatScore,
+    };
+
+  } catch (err) {
+    console.error('[Gemini] Error check login:', err.message);
+    if (context) {
+      await context.close().catch(() => {});
+    }
+    return {
+      loggedIn: false,
+      detail: `Gagal mengecek login: ${err.message}`,
+      error: err.message,
+    };
+  }
+}
+
+/**
+ * GET /api/check-gemini-login — Cek status login Gemini user
+ */
+app.get('/api/check-gemini-login', async (req, res) => {
+  console.log('[Gemini] Memeriksa status login...');
+  const result = await checkGeminiLogin();
+  res.json({
+    success: !result.error,
+    ...result,
+  });
+});
+
+/**
+ * POST /api/open-gemini - Buka Gemini AI visible, upload gambar (opsional), masukkan prompt.
+ * User akan manual klik Generate.
+ */
+app.post('/api/open-gemini', async (req, res) => {
+  const { prompt, referenceImage } = req.body;
+
+  if (!prompt || prompt.trim() === '') {
+    return res.status(400).json({ error: 'Prompt diperlukan.' });
+  }
+
+  let context = null;
+
+  try {
+    const userDataDir = path.join(process.cwd(), '.gemini-browser-profile');
+
+    console.log('[Gemini] Membuka Gemini AI di browser visible...');
+    context = await chromium.launchPersistentContext(userDataDir, {
+      headless: false,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+      ],
+      viewport: { width: 1280, height: 800 },
+      locale: 'id-ID',
+    });
+
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    });
+
+    const page = await context.newPage();
+
+    console.log('[Gemini] Navigasi ke https://gemini.google.com/app ...');
+    await page.goto('https://gemini.google.com/app', {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
+    await page.waitForTimeout(8000);
+
+    if (referenceImage) {
+      await uploadReferenceImage(page, referenceImage);
+    }
+
+    await typeToGeminiInput(page, prompt);
+
+    await page.waitForTimeout(1000);
+    console.log('[Gemini] Selesai! Browser tetap terbuka. User klik Generate manual.');
+
+    res.json({
+      success: true,
+      message: 'Browser Gemini terbuka dengan prompt siap. Silakan klik Generate di browser.',
+    });
+  } catch (err) {
+    console.error('[Gemini] Error:', err.message);
+    return res.status(500).json({
+      error: `Gagal membuka Gemini: ${err.message}`,
+    });
+  }
+});
+
+/**
+ * POST /api/analyze-image-gemini
+ * Upload gambar ke Gemini web otomatis, minta analisis + prompt rekomendasi,
+ * tunggu respons, ekstrak, dan return ke frontend.
+ */
+app.post('/api/analyze-image-gemini', async (req, res) => {
+  const { referenceImage, contextInfo = '', customInstruction = '' } = req.body;
+
+  if (!referenceImage) {
+    return res.status(400).json({ error: 'Gambar referensi diperlukan.' });
+  }
+
+  let context = null;
+
+  try {
+    const userDataDir = path.join(process.cwd(), '.gemini-browser-profile');
+
+    console.log('[Gemini] Membuka Gemini AI (auto-analyze mode)...');
+    context = await chromium.launchPersistentContext(userDataDir, {
+      headless: false,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+      ],
+      viewport: { width: 1280, height: 900 },
+      locale: 'id-ID',
+    });
+
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    });
+
+    const page = await context.newPage();
+
+    console.log('[Gemini] Navigasi ke https://gemini.google.com/app ...');
+    await page.goto('https://gemini.google.com/app', {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
+    await page.waitForTimeout(8000);
+
+    // Cek status login pakai shared evaluator
+    const loginCheck = await evaluateLoginFromPage(page);
+    console.log('[Gemini] Login check:', JSON.stringify(loginCheck));
+
+    if (!loginCheck.isLoggedIn) {
+      console.log('[Gemini] User BELUM login ke Gemini.');
+      await context.close();
+      context = null;
+      return res.json({
+        success: false,
+        isLoginRequired: true,
+        loginDetail: {
+          loginScore: loginCheck.loginScore,
+          chatScore: loginCheck.chatScore,
+        },
+        error: 'Anda belum login ke Gemini. Silakan buka Gemini, login dulu, lalu coba lagi.',
+      });
+    }
+    console.log('[Gemini] Login terdeteksi, melanjutkan analisis...');
+
+    // Upload reference image
+    await uploadReferenceImage(page, referenceImage);
+    await page.waitForTimeout(2000);
+
+    // Build the analysis prompt
+    const analysisPrompt = customInstruction ||
+`Analyze this reference image in EXTREME DETAIL. This is for creating a mega-detailed image generation prompt.
+
+First, describe EVERY visual element you see:
+
+1. **Visual Style & Art Direction**: What art style? (photorealistic, flat illustration, 3D render, watercolor, vector art, etc.)
+2. **Color Palette**: Dominant colors, accent colors, color harmony
+3. **Lighting**: Direction, intensity, mood (soft, dramatic, natural, neon, etc.)
+4. **Composition & Layout**: Rule of thirds, symmetry, framing, focal point
+5. **Subject/Character**: Appearance, expression, pose, clothing, age, gender if applicable
+6. **Background & Setting**: Environment, location, time of day, season
+7. **Props & Objects**: Every object visible, materials, textures
+8. **Typography**: Font style, text content, text placement (if any)
+9. **Mood & Atmosphere**: Emotional tone, vibe, energy level
+10. **Camera/Perspective**: Angle, distance, depth of field, lens type
+
+${contextInfo ? `\n**Additional Context:**\n${contextInfo}\n` : ''}
+
+Then, create a MEGA-DETAILED IMAGE GENERATION PROMPT in ENGLISH (minimum 150 words) that would reproduce a similar image using any AI image generator (Midjourney, DALL-E, Stable Diffusion, Gemini, etc.). Make it extremely specific — NOT generic. Include all the details above.
+
+Format your response as:
+
+## VISUAL ANALYSIS
+[Your detailed analysis here]
+
+## MEGA PROMPT RECOMMENDATION
+[The detailed English prompt here]`;
+
+    // Type the prompt
+    await typeToGeminiInput(page, analysisPrompt);
+
+    // Press Enter to submit
+    console.log('[Gemini] Menekan Enter untuk submit prompt...');
+    await page.waitForTimeout(1000);
+    await page.keyboard.press('Enter');
+
+    // Wait for response to generate
+    console.log('[Gemini] Menunggu respons dari Gemini...');
+    await page.waitForTimeout(5000);
+
+    // Wait for generation to complete
+    try {
+      await page.waitForFunction(() => {
+        const stopBtn = document.querySelector('[aria-label="Stop"], [aria-label="Hentikan"], button:has-text("Stop"), button:has-text("Hentikan")');
+        const loadingIndicators = document.querySelectorAll('[role="progressbar"], .loading, .generating, .thinking');
+        return (!stopBtn || !stopBtn.offsetParent) && loadingIndicators.length === 0;
+      }, { timeout: 45000, polling: 2000 });
+    } catch (timeoutErr) {
+      console.log('[Gemini] Timeout menunggu, tetap coba ekstrak...');
+    }
+
+    await page.waitForTimeout(3000);
+
+    // Debug screenshot
+    try {
+      await page.screenshot({ path: 'server/debug_gemini_response.png' });
+      console.log('[Gemini] Debug screenshot disimpan.');
+    } catch (ssErr) {}
+
+    // Extract response
+    const responseText = await extractGeminiResponse(page);
+
+    // Close browser
+    await context.close();
+    context = null;
+
+    console.log('[Gemini] Respons berhasil diekstrak!');
+
+    // Parse response to separate analysis and prompt
+    let analysis = responseText;
+    let megaPrompt = responseText;
+
+    const megaPromptMatch = responseText.match(/## MEGA PROMPT RECOMMENDATION\s*([\s\S]*)/i);
+    const visualAnalysisMatch = responseText.match(/## VISUAL ANALYSIS\s*([\s\S]*?)(?=## MEGA PROMPT)/i);
+
+    if (megaPromptMatch) {
+      megaPrompt = megaPromptMatch[1].trim();
+    }
+    if (visualAnalysisMatch) {
+      analysis = visualAnalysisMatch[1].trim();
+    }
+
+    res.json({
+      success: true,
+      response: responseText,
+      analysis: analysis,
+      megaPrompt: megaPrompt,
+    });
+
+  } catch (err) {
+    console.error('[Gemini] Error analyze-image:', err.message);
+    if (context) {
+      await context.close().catch(() => {});
+    }
+    return res.status(500).json({
+      success: false,
+      error: `Gagal menganalisis gambar: ${err.message}`,
+    });
+  }
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'BGI Scraper Server berjalan dengan baik!', version: '2.0' });
 });
 
-app.listen(PORT, () => {
-  console.log(`✅ BGI Instagram Scraper Server v2 berjalan di http://localhost:${PORT}`);
-  console.log(`   Endpoint: GET http://localhost:${PORT}/api/scrape-instagram?username=NAMA_AKUN`);
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('[Server] Unhandled error:', err.message);
+  res.status(500).json({ error: `Internal server error: ${err.message}` });
+});
+
+// ===== Start server dengan fallback port =====
+(async () => {
+  try {
+    const { srv, port } = await startServer(DEFAULT_PORT);
+
+    console.log(`✅ BGI Instagram Scraper Server v2 berjalan di http://localhost:${port}`);
+    if (port !== DEFAULT_PORT) {
+      console.log(`   ⚠️  Port ${DEFAULT_PORT} sudah digunakan, fallback ke port ${port}`);
+      console.log(`   🔧 Jika ingin menggunakan port ${DEFAULT_PORT}, update juga Vite proxy di vite.config.js`);
+    }
+    console.log(`   Endpoint:`);
+    console.log(`     GET  http://localhost:${port}/api/scrape-instagram?username=NAMA_AKUN`);
+    console.log(`     GET  http://localhost:${port}/api/check-gemini-login`);
+    console.log(`     POST http://localhost:${port}/api/open-gemini`);
+    console.log(`     POST http://localhost:${port}/api/analyze-image-gemini`);
+    console.log(`     GET  http://localhost:${port}/api/health`);
+    console.log(`\n   Tekan Ctrl+C untuk menghentikan server.`);
+
+    srv.on('error', (err) => {
+      console.error(`\n❌ Server error:`, err.message);
+      process.exit(1);
+    });
+
+  } catch (err) {
+    console.error(`\n❌ ${err.message}`);
+    console.log(`💡 Jalankan: netstat -ano | findstr :${DEFAULT_PORT} untuk lihat proses yang memakai port.`);
+    process.exit(1);
+  }
+})();
+
+process.on('uncaughtException', (err) => {
+  console.error('[Server] Uncaught exception:', err.message);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[Server] Unhandled rejection:', reason);
 });

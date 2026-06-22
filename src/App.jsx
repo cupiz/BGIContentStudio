@@ -5,6 +5,7 @@ import PillarMapping from './components/PillarMapping';
 import ScriptGenerator from './components/ScriptGenerator';
 import HookGenerator from './components/HookGenerator';
 import CaptionGenerator from './components/CaptionGenerator';
+import ImageGenerator from './components/ImageGenerator';
 import Settings from './components/Settings';
 
 export default function App() {
@@ -47,6 +48,8 @@ export default function App() {
         return <HookGenerator />;
       case 'captions':
         return <CaptionGenerator />;
+      case 'images':
+        return <ImageGenerator />;
       case 'settings':
         return <Settings />;
       default:
