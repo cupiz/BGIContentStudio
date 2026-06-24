@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Image, Sparkles, Copy, Trash2, ExternalLink, Upload, Plus, RefreshCw } from 'lucide-react';
+import { Image, Sparkles, Copy, Trash2, ExternalLink, Upload, Plus, RefreshCw, Download } from 'lucide-react';
 import { generateSingleImagePrompt, analyzeImageWithGeminiAPI } from '../services/gemini';
+import { generateImageWithOpenRouter, base64ToBlobUrl } from '../services/openrouter';
 
 export default function ImageGenerator() {
   const [prompts, setPrompts] = useState([]);
@@ -21,11 +22,98 @@ export default function ImageGenerator() {
   const [analyzingImage, setAnalyzingImage] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
   const [showContext, setShowContext] = useState(false);
+  const [openRouterModel, setOpenRouterModel] = useState('sourceful/riverflow-v2.5-fast');
+  const [openRouterResolution, setOpenRouterResolution] = useState('1K');
+  const [openRouterAspectRatio, setOpenRouterAspectRatio] = useState('1:1');
+  const [generatedImages, setGeneratedImages] = useState({}); // { promptId: { loading, url, error } }
   const fileInputRef = useRef(null);
 
-  // Clear any auto-loading on mount to guarantee clean state
+  // Auto-fill hook text from Hook Studio on mount
   useEffect(() => {
-    // Start completely clean as requested
+    const savedHooks = localStorage.getItem('bgi_hooks_result');
+    if (savedHooks) {
+      setHookText(savedHooks);
+    }
+
+    const savedScript = localStorage.getItem('bgi_active_script');
+    if (savedScript) setScriptText(savedScript);
+
+    const savedCaption = localStorage.getItem('bgi_caption_result');
+    if (savedCaption) setCaptionText(savedCaption);
+
+    const savedIdeas = localStorage.getItem('bgi_generated_ideas');
+    const savedActiveIdx = localStorage.getItem('bgi_active_idea_idx');
+    if (savedIdeas && savedActiveIdx !== null) {
+      try {
+        const ideas = JSON.parse(savedIdeas);
+        const idx = parseInt(savedActiveIdx);
+        if (ideas[idx]) {
+          setIdeaTitle(ideas[idx].title || '');
+          setPlatform(ideas[idx].platform || 'Instagram');
+          setContentFormat(ideas[idx].format || 'Carousel');
+        }
+      } catch (e) {}
+    }
+
+    const savedPlatform = localStorage.getItem('bgi_active_platform');
+    if (savedPlatform) setPlatform(savedPlatform);
+    const savedFormat = localStorage.getItem('bgi_active_format');
+    if (savedFormat) setContentFormat(savedFormat);
+
+    if (savedHooks || savedScript || savedCaption) {
+      setShowContext(true);
+    }
+
+    // Restore saved ImageGenerator state (prompts, generated images, reference, settings)
+    const savedPrompts = localStorage.getItem('bgi_image_prompts');
+    if (savedPrompts) {
+      try { setPrompts(JSON.parse(savedPrompts)); } catch (e) {}
+    }
+
+    const savedRef = localStorage.getItem('bgi_image_reference');
+    if (savedRef) {
+      try {
+        const ref = JSON.parse(savedRef);
+        if (ref.data) {
+          setReferenceImage(ref.data);
+          setReferenceImagePreview(ref.data);
+        }
+      } catch (e) {}
+    }
+
+    const savedState = localStorage.getItem('bgi_image_state');
+    if (savedState) {
+      try {
+        const st = JSON.parse(savedState);
+        if (st.slideCount) setSlideCount(st.slideCount);
+        if (st.openRouterModel) setOpenRouterModel(st.openRouterModel);
+        if (st.openRouterResolution) setOpenRouterResolution(st.openRouterResolution);
+        if (st.openRouterAspectRatio) setOpenRouterAspectRatio(st.openRouterAspectRatio);
+        if (typeof st.showContext === 'boolean') setShowContext(st.showContext);
+      } catch (e) {}
+    }
+
+    // Restore generated images from raw data (recreate blob URLs from b64_json)
+    const savedRawData = localStorage.getItem('bgi_image_raw_data');
+    if (savedRawData) {
+      try {
+        const rawData = JSON.parse(savedRawData);
+        const restored = {};
+        Object.entries(rawData).forEach(([promptId, entry]) => {
+          if (entry.type === 'url') {
+            restored[promptId] = { loading: false, url: entry.data, error: null };
+          } else if (entry.type === 'b64') {
+            const url = base64ToBlobUrl(entry.data);
+            restored[promptId] = { loading: false, url, error: null };
+          } else if (entry.type === 'error') {
+            restored[promptId] = { loading: false, url: null, error: entry.data };
+          }
+        });
+        if (Object.keys(restored).length > 0) {
+          setGeneratedImages(restored);
+        }
+      } catch (e) {}
+    }
   }, []);
 
   // Manual import from other studios when requested
@@ -119,7 +207,11 @@ export default function ImageGenerator() {
             status: 'ready',
           };
           generated.push(result);
-          setPrompts(prev => [...prev, newPrompt]);
+          setPrompts(prev => {
+            const updated = [...prev, newPrompt];
+            saveStateToLocalStorage(updated);
+            return updated;
+          });
         } else {
           throw new Error(`Gagal menghasilkan prompt untuk Slide ${i}.`);
         }
@@ -153,18 +245,35 @@ export default function ImageGenerator() {
       slide: prompts.length + 1,
       status: 'ready',
     };
-    setPrompts(prev => [...prev, item]);
+    const updated = [...prompts, item];
+    setPrompts(updated);
+    saveStateToLocalStorage(updated);
     setNewPrompt('');
   };
 
   // Remove a prompt
   const handleRemovePrompt = (id) => {
-    setPrompts(prev => prev.filter(p => p.id !== id));
+    // Revoke blob URL if exists
+    const img = generatedImages[id];
+    if (img?.url?.startsWith('blob:')) {
+      URL.revokeObjectURL(img.url);
+    }
+    const updated = prompts.filter(p => p.id !== id);
+    setPrompts(updated);
+    saveStateToLocalStorage(updated);
+    setGeneratedImages(prev => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    removeRawImageData(id);
   };
 
   // Edit a prompt
   const handleEditPrompt = (id, newText) => {
-    setPrompts(prev => prev.map(p => p.id === id ? { ...p, text: newText } : p));
+    const updated = prompts.map(p => p.id === id ? { ...p, text: newText } : p);
+    setPrompts(updated);
+    saveStateToLocalStorage(updated);
   };
 
   // Handle reference image upload
@@ -179,8 +288,10 @@ export default function ImageGenerator() {
 
     const reader = new FileReader();
     reader.onload = (ev) => {
-      setReferenceImage(ev.target.result);
-      setReferenceImagePreview(ev.target.result);
+      const dataUrl = ev.target.result;
+      setReferenceImage(dataUrl);
+      setReferenceImagePreview(dataUrl);
+      saveReferenceToLocalStorage(dataUrl);
       // Reset analysis when new image is uploaded
       setAnalysisResult(null);
     };
@@ -192,6 +303,7 @@ export default function ImageGenerator() {
     setReferenceImage(null);
     setReferenceImagePreview(null);
     setAnalysisResult(null);
+    saveReferenceToLocalStorage(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -236,7 +348,9 @@ export default function ImageGenerator() {
           visualStyle: 'Based on reference image',
           status: 'ready',
         };
-        setPrompts(prev => [...prev, newPrompt]);
+        const updatedWithAnalysis = [...prompts, newPrompt];
+        setPrompts(updatedWithAnalysis);
+        saveStateToLocalStorage(updatedWithAnalysis);
 
         setAnalysisResult({
           analysis,
@@ -308,13 +422,136 @@ export default function ImageGenerator() {
     setTimeout(() => setStatus(''), 2000);
   };
 
+  // Helper: save current state to localStorage synchronously
+  const saveStateToLocalStorage = (currentPrompts) => {
+    localStorage.setItem('bgi_image_prompts', JSON.stringify(currentPrompts));
+    localStorage.setItem('bgi_image_state', JSON.stringify({
+      slideCount,
+      openRouterModel,
+      openRouterResolution,
+      openRouterAspectRatio,
+      showContext,
+    }));
+  };
+
+  // Helper: save reference image to localStorage
+  const saveReferenceToLocalStorage = (refData) => {
+    if (refData) {
+      localStorage.setItem('bgi_image_reference', JSON.stringify({ data: refData }));
+    } else {
+      localStorage.removeItem('bgi_image_reference');
+    }
+  };
+
+  // Helper to save raw image data for persistence
+  const saveRawImageData = (promptId, rawEntry) => {
+    try {
+      const existing = localStorage.getItem('bgi_image_raw_data');
+      const data = existing ? JSON.parse(existing) : {};
+      data[promptId] = rawEntry;
+      localStorage.setItem('bgi_image_raw_data', JSON.stringify(data));
+    } catch (e) {
+      // localStorage may be full, silently fail
+    }
+  };
+
+  const removeRawImageData = (promptId) => {
+    try {
+      const existing = localStorage.getItem('bgi_image_raw_data');
+      if (!existing) return;
+      const data = JSON.parse(existing);
+      delete data[promptId];
+      if (Object.keys(data).length === 0) {
+        localStorage.removeItem('bgi_image_raw_data');
+      } else {
+        localStorage.setItem('bgi_image_raw_data', JSON.stringify(data));
+      }
+    } catch (e) {}
+  };
+
+  const clearAllRawImageData = () => {
+    localStorage.removeItem('bgi_image_raw_data');
+  };
+
+  // Generate image with OpenRouter for a specific prompt
+  const handleGenerateWithOpenRouter = async (promptText, promptId) => {
+    if (!openRouterModel) {
+      setError('Silakan pilih model OpenRouter terlebih dahulu.');
+      return;
+    }
+
+    // Revoke old blob URL if exists
+    const oldImg = generatedImages[promptId];
+    if (oldImg?.url?.startsWith('blob:')) {
+      URL.revokeObjectURL(oldImg.url);
+    }
+
+    // Mark this prompt as generating
+    setGeneratedImages(prev => ({ ...prev, [promptId]: { loading: true, url: null, error: null } }));
+    setError('');
+    setStatus(`Mengirim prompt ke OpenRouter (${openRouterModel})...`);
+
+    try {
+      const result = await generateImageWithOpenRouter({
+        prompt: promptText,
+        model: openRouterModel,
+        resolution: openRouterResolution,
+        aspectRatio: openRouterModel === 'x-ai/grok-imagine-image-quality' ? openRouterAspectRatio : undefined,
+        referenceImage: referenceImage, // Pass reference image for img2img if uploaded
+      });
+
+      if (result.success && result.data.length > 0) {
+        const imageData = result.data[0];
+        let imageUrl = null;
+
+        if (imageData.url) {
+          imageUrl = imageData.url;
+        } else if (imageData.b64_json) {
+          imageUrl = base64ToBlobUrl(imageData.b64_json);
+        }
+
+        if (imageUrl) {
+          setGeneratedImages(prev => ({ ...prev, [promptId]: { loading: false, url: imageUrl, error: null } }));
+          // Save raw data for persistence
+          if (imageData.b64_json) {
+            saveRawImageData(promptId, { type: 'b64', data: imageData.b64_json });
+          } else if (imageData.url) {
+            saveRawImageData(promptId, { type: 'url', data: imageData.url });
+          }
+          setStatus(`✅ Gambar berhasil digenerate dengan ${openRouterModel}!`);
+        } else {
+          throw new Error('Tidak ada URL gambar yang diterima dari OpenRouter.');
+        }
+      } else {
+        throw new Error('Gagal mendapatkan gambar dari OpenRouter.');
+      }
+    } catch (err) {
+      setGeneratedImages(prev => ({ ...prev, [promptId]: { loading: false, url: null, error: err.message } }));
+      saveRawImageData(promptId, { type: 'error', data: err.message });
+      setError(`Gagal generate gambar: ${err.message}`);
+    }
+
+    setTimeout(() => setStatus(''), 5000);
+  };
+
   // Clear all
   const handleClearAll = () => {
+    // Revoke all blob URLs
+    Object.values(generatedImages).forEach(img => {
+      if (img?.url?.startsWith('blob:')) {
+        URL.revokeObjectURL(img.url);
+      }
+    });
     setPrompts([]);
     setNewPrompt('');
     handleRemoveImage();
     setError('');
     setStatus('');
+    setGeneratedImages({});
+    clearAllRawImageData();
+    localStorage.removeItem('bgi_image_prompts');
+    localStorage.removeItem('bgi_image_reference');
+    localStorage.removeItem('bgi_image_state');
   };
 
   return (
@@ -340,191 +577,23 @@ export default function ImageGenerator() {
         <div className="glass-card">
           <h2 className="card-title"><Image size={18} /> Konfigurasi Image</h2>
 
-          {/* Hook Parser Section */}
-          <div className="form-group">
-            <label className="form-label">Teks Hook ( dari Hook Studio )</label>
-            <textarea
-              className="textarea-input"
-              value={hookText}
-              onChange={(e) => setHookText(e.target.value)}
-              placeholder="Tempel teks hook dari Hook Studio di sini, atau biarkan otomatis terisi..."
-              style={{ minHeight: '220px', fontSize: '0.85rem' }}
-            />
-          </div>
-
-          <div className="grid-2">
-            <div className="form-group">
-              <label className="form-label">Jumlah Slide</label>
-              <select
-                className="select-input"
-                value={slideCount}
-                onChange={(e) => setSlideCount(parseInt(e.target.value))}
-              >
-                {[1,2,3,4,5,6,7,8,9,10].map(n => (
-                  <option key={n} value={n}>{n} gambar</option>
-                ))}
-              </select>
-            </div>
-            <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end' }}>
-              <button
-                type="button"
-                onClick={handleParseFromHooks}
-                className="btn btn-primary"
-                style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.25rem' }}
-                disabled={loading || !hookText.trim()}
-              >
-                {loading ? (
-                  <><div className="loading-spinner"></div> Menganalisis...</>
-                ) : (
-                  <><Sparkles size={16} /> Parse dari Hook</>
-                )}
-              </button>
-            </div>
-          </div>
-
-          {/* Content Context Accordion */}
-          <div style={{ 
-            background: 'rgba(99, 102, 241, 0.05)', 
-            borderRadius: '10px', 
-            border: '1px solid rgba(99, 102, 241, 0.15)',
-            marginBottom: '1rem',
-            overflow: 'hidden'
+          {/* ===== ALUR UTAMA: GAMBAR REFERENSI ===== */}
+          <div style={{
+            background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.08), rgba(99, 102, 241, 0.08))',
+            borderRadius: '12px',
+            border: '1px solid rgba(168, 85, 247, 0.2)',
+            padding: '1rem',
+            marginBottom: '1.25rem',
           }}>
-            <div 
-              onClick={() => setShowContext(!showContext)}
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: '0.75rem 1rem',
-                cursor: 'pointer',
-                userSelect: 'none',
-                fontSize: '0.85rem',
-                fontWeight: '600',
-                color: '#c7d2fe'
-              }}
-            >
-              <span>📋 Konteks Konten (Script, Caption, Ide)</span>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                {showContext ? 'Sembunyikan ▴' : 'Tampilkan ▾'}
-              </span>
-            </div>
+            <h3 style={{ fontSize: '0.85rem', fontWeight: '700', color: '#a78bfa', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <Upload size={16} /> 1. Upload Gambar Referensi
+            </h3>
+            <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '0.75rem', lineHeight: '1.4' }}>
+              Mulai dengan mengunggah gambar referensi sebagai panduan gaya visual. 
+              Gambar ini akan digunakan sebagai acuan untuk image-to-image generation di OpenRouter.
+              Setelah upload, klik <strong>"Analisis dengan Gemini"</strong> untuk mendapatkan prompt rekomendasi.
+            </p>
 
-            {showContext && (
-              <div style={{ padding: '0 1rem 1rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                {/* Idea Title */}
-                <div>
-                  <label className="form-label" style={{ fontSize: '0.7rem', marginBottom: '0.25rem' }}>Judul Ide Konten</label>
-                  <input
-                    type="text"
-                    className="input-text"
-                    value={ideaTitle}
-                    onChange={(e) => setIdeaTitle(e.target.value)}
-                    placeholder="Judul ide konten..."
-                    style={{ height: '34px', fontSize: '0.8rem', padding: '0 0.75rem' }}
-                  />
-                </div>
-
-                {/* Platform & Format */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-                  <div>
-                    <label className="form-label" style={{ fontSize: '0.7rem', marginBottom: '0.25rem' }}>Platform</label>
-                    <select
-                      className="select-input"
-                      value={platform}
-                      onChange={(e) => setPlatform(e.target.value)}
-                      style={{ height: '34px', padding: '0 0.5rem', fontSize: '0.8rem' }}
-                    >
-                      {['Instagram', 'TikTok', 'Threads/X', 'YouTube', 'LinkedIn'].map(p => (
-                        <option key={p} value={p}>{p}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="form-label" style={{ fontSize: '0.7rem', marginBottom: '0.25rem' }}>Format</label>
-                    <select
-                      className="select-input"
-                      value={contentFormat}
-                      onChange={(e) => setContentFormat(e.target.value)}
-                      style={{ height: '34px', padding: '0 0.5rem', fontSize: '0.8rem' }}
-                    >
-                      {['Carousel', 'Reels', 'Single Image', 'Carousel QnA', 'Carousel Step by Step', 'Carousel Study Case', 'Carousel Reaction'].map(f => (
-                        <option key={f} value={f}>{f}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* Script Text */}
-                <div>
-                  <label className="form-label" style={{ fontSize: '0.7rem', marginBottom: '0.25rem' }}>
-                    Script / Naskah Konten
-                    {scriptText && <span style={{ color: '#34d399', fontWeight: '400', marginLeft: '0.5rem' }}>✓ Terisi dari Script Builder</span>}
-                  </label>
-                  <textarea
-                    className="textarea-input"
-                    value={scriptText}
-                    onChange={(e) => setScriptText(e.target.value)}
-                    placeholder="Draf naskah konten akan otomatis terisi dari Script Builder..."
-                    style={{ minHeight: '200px', fontSize: '0.85rem', fontFamily: 'monospace' }}
-                  />
-                </div>
-
-                {/* Caption Text */}
-                <div>
-                  <label className="form-label" style={{ fontSize: '0.7rem', marginBottom: '0.25rem' }}>
-                    Caption Postingan
-                    {captionText && <span style={{ color: '#34d399', fontWeight: '400', marginLeft: '0.5rem' }}>✓ Terisi dari Caption Craft</span>}
-                  </label>
-                  <textarea
-                    className="textarea-input"
-                    value={captionText}
-                    onChange={(e) => setCaptionText(e.target.value)}
-                    placeholder="Caption akan otomatis terisi dari Caption Craft..."
-                    style={{ minHeight: '180px', fontSize: '0.85rem' }}
-                  />
-                </div>
-
-                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic', lineHeight: '1.4' }}>
-                  💡 Semakin lengkap konteks yang diisi, semakin detail dan relevan prompt gambar yang dihasilkan AI.
-                  Data otomatis terisi dari Script Builder, Hook Studio, dan Caption Craft.
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Manual Input Section */}
-          <div className="form-group">
-            <label className="form-label">Tambah Prompt Manual</label>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <textarea
-                className="textarea-input"
-                value={newPrompt}
-                onChange={(e) => setNewPrompt(e.target.value)}
-                placeholder="Ketik prompt gambar manual, contoh: 'Flat illustration of a student reading a book at a cafe, warm tones, minimal style'"
-                style={{ minHeight: '180px', flex: 1, fontSize: '0.85rem' }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    handleAddPrompt();
-                  }
-                }}
-              />
-              <button
-                type="button"
-                onClick={handleAddPrompt}
-                className="btn btn-outline"
-                style={{ alignSelf: 'flex-end', padding: '0.5rem 0.75rem' }}
-                disabled={!newPrompt.trim()}
-              >
-                <Plus size={18} />
-              </button>
-            </div>
-          </div>
-
-          {/* Reference Image Upload */}
-          <div className="form-group">
-            <label className="form-label">Gambar Referensi (Opsional)</label>
             <div
               className={`image-upload-zone ${referenceImagePreview ? 'has-image' : ''}`}
               onClick={() => fileInputRef.current?.click()}
@@ -552,7 +621,7 @@ export default function ImageGenerator() {
                   <img
                     src={referenceImagePreview}
                     alt="Referensi"
-                    style={{ maxWidth: '100%', maxHeight: '160px', borderRadius: '8px', objectFit: 'contain' }}
+                    style={{ maxWidth: '100%', maxHeight: '200px', borderRadius: '8px', objectFit: 'contain' }}
                   />
                   <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
                     <button
@@ -574,24 +643,18 @@ export default function ImageGenerator() {
                       className="btn btn-outline"
                       style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem', borderColor: 'var(--danger)', color: 'var(--danger)' }}
                     >
-                      <Trash2 size={12} /> Hapus
+                      <Trash2 size={12} /> Hapus Gambar
                     </button>
                   </div>
                 </div>
               ) : (
-                <div style={{ color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
-                  <Upload size={28} />
+                <div style={{ color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', padding: '1rem 0' }}>
+                  <Upload size={32} style={{ color: '#a78bfa' }} />
                   <span style={{ fontSize: '0.85rem' }}>Klik atau seret gambar ke sini</span>
                   <span style={{ fontSize: '0.7rem' }}>JPG, PNG, WebP — Maks 5MB</span>
                 </div>
               )}
             </div>
-            {referenceImagePreview && !analyzingImage && (
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic', marginTop: '0.5rem', lineHeight: '1.4' }}>
-                💡 Klik "Analisis dengan Gemini" untuk mendeteksi gaya visual, subjek, setting, 
-                dan menyusun rekomendasi prompt gambar mega-detail secara instan menggunakan API Key Anda.
-              </div>
-            )}
           </div>
 
           {/* Analysis Result Display */}
@@ -601,6 +664,7 @@ export default function ImageGenerator() {
               border: '1px solid rgba(20, 184, 166, 0.2)',
               borderRadius: '12px',
               padding: '1rem',
+              marginBottom: '1.25rem',
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                 <label className="form-label" style={{ margin: 0, color: '#2dd4bf' }}>
@@ -624,9 +688,9 @@ export default function ImageGenerator() {
               {analysisResult.analysis && (
                 <div style={{ marginBottom: '0.75rem' }}>
                   <label className="form-label" style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Visual Analysis</label>
-                  <div className="generation-result-box" style={{ fontSize: '0.8rem', maxHeight: '200px', whiteSpace: 'pre-wrap' }}>
-                    {analysisResult.analysis.substring(0, 1000)}
-                    {analysisResult.analysis.length > 1000 && '...'}
+                  <div className="generation-result-box" style={{ fontSize: '0.8rem', maxHeight: '150px', whiteSpace: 'pre-wrap' }}>
+                    {analysisResult.analysis.substring(0, 800)}
+                    {analysisResult.analysis.length > 800 && '...'}
                   </div>
                 </div>
               )}
@@ -643,13 +707,264 @@ export default function ImageGenerator() {
                       <Copy size={12} /> Salin
                     </button>
                   </div>
-                  <div className="generation-result-box" style={{ fontSize: '0.85rem', maxHeight: '250px', whiteSpace: 'pre-wrap' }}>
+                  <div className="generation-result-box" style={{ fontSize: '0.85rem', maxHeight: '200px', whiteSpace: 'pre-wrap' }}>
                     {analysisResult.megaPrompt}
                   </div>
                 </div>
               )}
             </div>
           )}
+
+          {/* ===== ALUR KEDUA: PROMPT DARI HOOK ===== */}
+          <div style={{
+            borderTop: '1px solid var(--border-color)',
+            paddingTop: '1rem',
+            marginBottom: '0.5rem',
+          }}>
+            <h3 style={{ fontSize: '0.85rem', fontWeight: '700', color: '#c7d2fe', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <Sparkles size={16} /> 2. Generate Prompt dari Hook
+            </h3>
+
+            <div className="form-group">
+              <label className="form-label">Teks Hook ( dari Hook Studio )</label>
+              <textarea
+                className="textarea-input"
+                value={hookText}
+                onChange={(e) => setHookText(e.target.value)}
+                placeholder="Tempel teks hook dari Hook Studio di sini, atau biarkan otomatis terisi..."
+                style={{ minHeight: '160px', fontSize: '0.85rem' }}
+              />
+            </div>
+
+            <div className="grid-2">
+              <div className="form-group">
+                <label className="form-label">Jumlah Slide</label>
+                <select
+                  className="select-input"
+                  value={slideCount}
+                  onChange={(e) => setSlideCount(parseInt(e.target.value))}
+                >
+                  {[1,2,3,4,5,6,7,8,9,10].map(n => (
+                    <option key={n} value={n}>{n} gambar</option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end' }}>
+                <button
+                  type="button"
+                  onClick={handleParseFromHooks}
+                  className="btn btn-primary"
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.25rem' }}
+                  disabled={loading || !hookText.trim()}
+                >
+                  {loading ? (
+                    <><div className="loading-spinner"></div> Menganalisis...</>
+                  ) : (
+                    <><Sparkles size={16} /> Parse dari Hook</>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Content Context Accordion */}
+            <div style={{ 
+              background: 'rgba(99, 102, 241, 0.05)', 
+              borderRadius: '10px', 
+              border: '1px solid rgba(99, 102, 241, 0.15)',
+              marginBottom: '0.75rem',
+              overflow: 'hidden'
+            }}>
+              <div 
+                onClick={() => setShowContext(!showContext)}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: '0.6rem 0.85rem',
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  fontSize: '0.8rem',
+                  fontWeight: '600',
+                  color: '#c7d2fe'
+                }}
+              >
+                <span>📋 Konteks Konten (Script, Caption, Ide)</span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                  {showContext ? 'Sembunyikan ▴' : 'Tampilkan ▾'}
+                </span>
+              </div>
+
+              {showContext && (
+                <div style={{ padding: '0 0.85rem 0.85rem 0.85rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                  {/* Idea Title */}
+                  <div>
+                    <label className="form-label" style={{ fontSize: '0.7rem', marginBottom: '0.25rem' }}>Judul Ide Konten</label>
+                    <input
+                      type="text"
+                      className="input-text"
+                      value={ideaTitle}
+                      onChange={(e) => setIdeaTitle(e.target.value)}
+                      placeholder="Judul ide konten..."
+                      style={{ height: '32px', fontSize: '0.8rem', padding: '0 0.75rem' }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                    <div>
+                      <label className="form-label" style={{ fontSize: '0.7rem', marginBottom: '0.25rem' }}>Platform</label>
+                      <select
+                        className="select-input"
+                        value={platform}
+                        onChange={(e) => setPlatform(e.target.value)}
+                        style={{ height: '32px', padding: '0 0.5rem', fontSize: '0.8rem' }}
+                      >
+                        {['Instagram', 'TikTok', 'Threads/X', 'YouTube', 'LinkedIn'].map(p => (
+                          <option key={p} value={p}>{p}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="form-label" style={{ fontSize: '0.7rem', marginBottom: '0.25rem' }}>Format</label>
+                      <select
+                        className="select-input"
+                        value={contentFormat}
+                        onChange={(e) => setContentFormat(e.target.value)}
+                        style={{ height: '32px', padding: '0 0.5rem', fontSize: '0.8rem' }}
+                      >
+                        {['Carousel', 'Reels', 'Single Image', 'Carousel QnA', 'Carousel Step by Step', 'Carousel Study Case', 'Carousel Reaction'].map(f => (
+                          <option key={f} value={f}>{f}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Script Text */}
+                  <div>
+                    <label className="form-label" style={{ fontSize: '0.7rem', marginBottom: '0.25rem' }}>
+                      Script / Naskah Konten
+                      {scriptText && <span style={{ color: '#34d399', fontWeight: '400', marginLeft: '0.5rem' }}>✓ Terisi dari Script Builder</span>}
+                    </label>
+                    <textarea
+                      className="textarea-input"
+                      value={scriptText}
+                      onChange={(e) => setScriptText(e.target.value)}
+                      placeholder="Draf naskah konten akan otomatis terisi dari Script Builder..."
+                      style={{ minHeight: '120px', fontSize: '0.85rem', fontFamily: 'monospace' }}
+                    />
+                  </div>
+
+                  {/* Caption Text */}
+                  <div>
+                    <label className="form-label" style={{ fontSize: '0.7rem', marginBottom: '0.25rem' }}>
+                      Caption Postingan
+                      {captionText && <span style={{ color: '#34d399', fontWeight: '400', marginLeft: '0.5rem' }}>✓ Terisi dari Caption Craft</span>}
+                    </label>
+                    <textarea
+                      className="textarea-input"
+                      value={captionText}
+                      onChange={(e) => setCaptionText(e.target.value)}
+                      placeholder="Caption akan otomatis terisi dari Caption Craft..."
+                      style={{ minHeight: '120px', fontSize: '0.85rem' }}
+                    />
+                  </div>
+
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic', lineHeight: '1.4' }}>
+                    💡 Semakin lengkap konteks yang diisi, semakin detail dan relevan prompt gambar yang dihasilkan AI.
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* OpenRouter Image Generation Settings */}
+          <div style={{
+            background: 'rgba(20, 184, 166, 0.05)',
+            borderRadius: '10px',
+            border: '1px solid rgba(20, 184, 166, 0.15)',
+            padding: '1rem',
+            marginBottom: '1rem'
+          }}>
+            <h3 style={{ fontSize: '0.85rem', fontWeight: '600', color: '#2dd4bf', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <Image size={16} /> 3. Generate Gambar dengan OpenRouter
+            </h3>
+            <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+              <label className="form-label" style={{ fontSize: '0.7rem', marginBottom: '0.25rem' }}>Pilih Model</label>
+              <select
+                className="select-input"
+                value={openRouterModel}
+                onChange={(e) => setOpenRouterModel(e.target.value)}
+                style={{ height: '34px', padding: '0 0.5rem', fontSize: '0.8rem' }}
+              >
+                <option value="sourceful/riverflow-v2.5-fast">Sourceful Riverflow v2.5 Fast (Cepat)</option>
+                <option value="x-ai/grok-imagine-image-quality">xAI Grok Imagine Image Quality (Kualitas Tinggi)</option>
+              </select>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '0.75rem' }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label" style={{ fontSize: '0.7rem', marginBottom: '0.25rem' }}>Resolusi</label>
+                <select
+                  className="select-input"
+                  value={openRouterResolution}
+                  onChange={(e) => setOpenRouterResolution(e.target.value)}
+                  style={{ height: '34px', padding: '0 0.5rem', fontSize: '0.8rem' }}
+                >
+                  <option value="1K">1K (Cepat)</option>
+                  <option value="2K">2K (Kualitas Tinggi)</option>
+                </select>
+              </div>
+              {openRouterModel === 'x-ai/grok-imagine-image-quality' && (
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label" style={{ fontSize: '0.7rem', marginBottom: '0.25rem' }}>Aspect Ratio</label>
+                  <select
+                    className="select-input"
+                    value={openRouterAspectRatio}
+                    onChange={(e) => setOpenRouterAspectRatio(e.target.value)}
+                    style={{ height: '34px', padding: '0 0.5rem', fontSize: '0.8rem' }}
+                  >
+                    <option value="1:1">1:1 (Kotak)</option>
+                    <option value="3:4">3:4 (Portrait)</option>
+                    <option value="4:3">4:3 (Landscape)</option>
+                    <option value="9:16">9:16 (Story/Reels)</option>
+                    <option value="16:9">16:9 (Wide)</option>
+                  </select>
+                </div>
+              )}
+            </div>
+
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic', lineHeight: '1.4' }}>
+              💡 Setelah prompt siap, klik tombol <strong>OpenRouter</strong> di setiap kartu prompt pada panel kanan untuk langsung generate gambar.
+            </div>
+          </div>
+
+          {/* Manual Input Section */}
+          <div className="form-group">
+            <label className="form-label">Tambah Prompt Manual</label>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <textarea
+                className="textarea-input"
+                value={newPrompt}
+                onChange={(e) => setNewPrompt(e.target.value)}
+                placeholder="Ketik prompt gambar manual, contoh: 'Flat illustration of a student reading a book at a cafe, warm tones, minimal style'"
+                style={{ minHeight: '140px', flex: 1, fontSize: '0.85rem' }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleAddPrompt();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                onClick={handleAddPrompt}
+                className="btn btn-outline"
+                style={{ alignSelf: 'flex-end', padding: '0.5rem 0.75rem' }}
+                disabled={!newPrompt.trim()}
+              >
+                <Plus size={18} />
+              </button>
+            </div>
+          </div>
 
           {/* Status & Error */}
           {error && (
@@ -813,7 +1128,72 @@ export default function ImageGenerator() {
                         <><ExternalLink size={14} /> ChatGPT</>
                       )}
                     </button>
+                    <button
+                      onClick={() => handleGenerateWithOpenRouter(item.text, item.id)}
+                      className="btn btn-outline"
+                      disabled={generatedImages[item.id]?.loading}
+                      style={{
+                        flex: 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '0.4rem',
+                        fontSize: '0.85rem',
+                        padding: '0.5rem 0.75rem',
+                        borderColor: 'rgba(20, 184, 166, 0.3)',
+                        color: '#2dd4bf',
+                        opacity: generatedImages[item.id]?.loading ? 0.6 : 1,
+                      }}
+                      title={`Generate dengan ${openRouterModel}`}
+                    >
+                      {generatedImages[item.id]?.loading ? (
+                        <><div className="loading-spinner" style={{ borderTopColor: '#2dd4bf' }}></div></>
+                      ) : (
+                        <><Download size={14} /> OpenRouter</>
+                      )}
+                    </button>
                   </div>
+
+                  {/* Generated Image Preview */}
+                  {generatedImages[item.id]?.url && (
+                    <div style={{ marginTop: '0.75rem', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
+                      <img
+                        src={generatedImages[item.id].url}
+                        alt={`Generated for slide ${item.slide || idx + 1}`}
+                        style={{ width: '100%', maxHeight: '400px', objectFit: 'contain', background: 'rgba(0,0,0,0.3)' }}
+                      />
+                      <div style={{ padding: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)' }}>
+                        <span style={{ fontSize: '0.72rem', color: '#2dd4bf' }}>✅ Generated with {openRouterModel}</span>
+                        <button
+                          onClick={() => {
+                            const link = document.createElement('a');
+                            link.href = generatedImages[item.id].url;
+                            link.download = `slide-${item.slide || idx + 1}.png`;
+                            link.click();
+                          }}
+                          className="btn btn-outline"
+                          style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+                        >
+                          <Download size={12} /> Download
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Generated Image Error */}
+                  {generatedImages[item.id]?.error && (
+                    <div style={{
+                      marginTop: '0.5rem',
+                      padding: '0.5rem',
+                      borderRadius: '6px',
+                      background: 'rgba(239,68,68,0.08)',
+                      border: '1px solid rgba(239,68,68,0.2)',
+                      fontSize: '0.75rem',
+                      color: '#f87171',
+                    }}>
+                      ⚠️ {generatedImages[item.id].error}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

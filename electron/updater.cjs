@@ -12,7 +12,7 @@
  * 7. Rollback on failure
  */
 const { app, BrowserWindow, shell } = require('electron');
-const { autoUpdater } = require('electron-updater');
+
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
@@ -228,13 +228,9 @@ function restoreFromBackup(backupDir) {
  * Restart the application
  */
 function restartApp() {
-  const exePath = app.getPath('exe');
-  
-  // Spawn new instance
-  execFile(exePath, [], { detached: true }, () => {});
-  
-  // Quit current instance
-  app.quit();
+  // Use app.relaunch() to avoid race condition between new and old instance
+  app.relaunch();
+  app.exit(0);
 }
 
 /**

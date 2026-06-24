@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Key, User, Cpu, Sparkles, Check, AlertCircle, Trash2 } from 'lucide-react';
+import { Key, User, Cpu, Sparkles, Check, AlertCircle, Trash2, Image } from 'lucide-react';
 import { generateWithGemini } from '../services/gemini';
 
 export default function Settings() {
   const [apiKey, setApiKey] = useState('');
   const [creatorName, setCreatorName] = useState('');
   const [model, setModel] = useState('gemma-4-31b-it');
+  const [openRouterApiKey, setOpenRouterApiKey] = useState('');
   
   // Status states
   const [loading, setLoading] = useState(false);
@@ -16,6 +17,7 @@ export default function Settings() {
     setApiKey(localStorage.getItem('bgi_gemini_api_key') || '');
     setCreatorName(localStorage.getItem('bgi_creator_name') || 'Creator');
     setModel(localStorage.getItem('bgi_gemini_model') || 'gemma-4-31b-it');
+    setOpenRouterApiKey(localStorage.getItem('bgi_openrouter_api_key') || '');
   }, []);
 
   const handleSave = (e) => {
@@ -23,6 +25,7 @@ export default function Settings() {
     localStorage.setItem('bgi_gemini_api_key', apiKey.trim());
     localStorage.setItem('bgi_creator_name', creatorName.trim() || 'Creator');
     localStorage.setItem('bgi_gemini_model', model);
+    localStorage.setItem('bgi_openrouter_api_key', openRouterApiKey.trim());
     
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 3000);
@@ -107,6 +110,20 @@ export default function Settings() {
               />
               <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem', display: 'block' }}>
                 Dapatkan API Key gratis di <a href="https://aistudio.google.com/api-keys" target="_blank" rel="noreferrer" style={{ color: 'var(--primary)', textDecoration: 'underline' }}>Google AI Studio</a>.
+              </span>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label"><Image size={14} style={{ verticalAlign: 'middle', marginRight: '0.25rem' }} /> OpenRouter API Key (untuk Image Generation)</label>
+              <input 
+                type="password" 
+                className="input-text" 
+                value={openRouterApiKey}
+                onChange={(e) => setOpenRouterApiKey(e.target.value)}
+                placeholder="sk-or-v1-..."
+              />
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem', display: 'block' }}>
+                Dapatkan API Key di <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" style={{ color: 'var(--primary)', textDecoration: 'underline' }}>OpenRouter</a>. Diperlukan untuk generate gambar langsung dari Image Studio.
               </span>
             </div>
 

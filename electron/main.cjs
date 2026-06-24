@@ -389,7 +389,6 @@ ipcMain.on('show-notification', (_, { title, body }) => {
 // ===== Update Handlers =====
 ipcMain.handle('check-for-updates', () => updater.checkForUpdates());
 ipcMain.handle('download-update', () => updater.downloadAndInstall());
-ipcMain.handle('get-app-version', () => updater.getCurrentVersion());
 
 // ===== App Lifecycle =====
 app.whenReady().then(async () => {
