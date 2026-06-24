@@ -36,6 +36,7 @@ export default function TeamWorkflow() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL'); // 'ALL', 'PENDING', 'UPLOADED', 'DONE'
 
   // CS inputs
   const [selectedFile, setSelectedFile] = useState(null);
@@ -146,7 +147,7 @@ export default function TeamWorkflow() {
 
       if (registeredCount > 0) {
         // Fetch ulang antrean terbaru dari VPS database
-        const endpoint = '/api/content/pending';
+        const endpoint = '/api/content/all';
         const response = await fetch(`${url}${endpoint}`, {
           headers: { 'Authorization': `Bearer ${activeToken}` }
         });
@@ -171,7 +172,7 @@ export default function TeamWorkflow() {
     setError('');
     
     try {
-      const endpoint = role === 'cs' ? '/api/content/pending' : '/api/content/uploaded';
+      const endpoint = '/api/content/all';
       const response = await fetch(`${url}${endpoint}`, {
         headers: {
           'Authorization': `Bearer ${activeToken}`
@@ -533,6 +534,18 @@ export default function TeamWorkflow() {
     );
   }
 
+  const counts = {
+    ALL: files.length,
+    PENDING: files.filter(f => f.status === 'PENDING').length,
+    UPLOADED: files.filter(f => f.status === 'UPLOADED').length,
+    DONE: files.filter(f => f.status === 'DONE').length
+  };
+
+  const filteredFiles = files.filter(file => {
+    if (statusFilter === 'ALL') return true;
+    return file.status === statusFilter;
+  });
+
   return (
     <div className="settings-container">
       {/* Tab Header / Profile */}
@@ -579,9 +592,9 @@ export default function TeamWorkflow() {
         <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', minHeight: '500px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255, 255, 255, 0.08)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
             <h2 className="card-title" style={{ margin: 0 }}>
-              {userRole === 'cs' ? 'Antrean Posting (PENDING)' : 'Menunggu Persetujuan (UPLOADED)'}
+              Daftar Konten Tim
               <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: '0.5rem' }}>
-                ({files.length} gambar)
+                ({filteredFiles.length} file)
               </span>
             </h2>
             <button
@@ -595,17 +608,79 @@ export default function TeamWorkflow() {
             </button>
           </div>
 
+          {/* Status Filter Tab Buttons */}
+          <div style={{ display: 'flex', gap: '0.35rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
+            {[
+              { id: 'ALL', label: 'Semua' },
+              { id: 'PENDING', label: 'Pending' },
+              { id: 'UPLOADED', label: 'Uploaded' },
+              { id: 'DONE', label: 'Done' }
+            ].map((f) => {
+              const isActive = statusFilter === f.id;
+              let badgeColor = 'rgba(255, 255, 255, 0.15)';
+              let activeBg = 'rgba(255, 255, 255, 0.08)';
+              let activeText = 'var(--text-main)';
+
+              if (f.id === 'PENDING') {
+                badgeColor = '#f59e0b';
+                activeBg = 'rgba(245, 158, 11, 0.15)';
+                activeText = '#fbbf24';
+              } else if (f.id === 'UPLOADED') {
+                badgeColor = '#3b82f6';
+                activeBg = 'rgba(59, 130, 246, 0.15)';
+                activeText = '#60a5fa';
+              } else if (f.id === 'DONE') {
+                badgeColor = '#10b981';
+                activeBg = 'rgba(16, 185, 129, 0.15)';
+                activeText = '#34d399';
+              }
+
+              return (
+                <button
+                  key={f.id}
+                  onClick={() => setStatusFilter(f.id)}
+                  className="btn"
+                  style={{
+                    height: '28px',
+                    fontSize: '0.72rem',
+                    padding: '0 0.6rem',
+                    borderRadius: '6px',
+                    borderColor: isActive ? badgeColor : 'rgba(255, 255, 255, 0.05)',
+                    background: isActive ? activeBg : 'rgba(255, 255, 255, 0.02)',
+                    color: isActive ? activeText : 'var(--text-secondary)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.25rem',
+                    fontWeight: isActive ? '600' : 'normal'
+                  }}
+                >
+                  {f.label}
+                  <span style={{
+                    fontSize: '0.65rem',
+                    background: isActive ? badgeColor : 'rgba(255, 255, 255, 0.08)',
+                    color: isActive ? '#000' : 'var(--text-muted)',
+                    padding: '0.05rem 0.35rem',
+                    borderRadius: '10px',
+                    fontWeight: '700'
+                  }}>
+                    {counts[f.id]}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
           {loading ? (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, minHeight: '300px', gap: '1rem' }}>
               <div className="loading-spinner" style={{ width: '40px', height: '40px', borderWidth: '3px' }}></div>
               <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Membaca antrean dari VPS...</span>
             </div>
-          ) : files.length === 0 ? (
+          ) : filteredFiles.length === 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, minHeight: '300px', color: 'var(--text-muted)', gap: '0.5rem' }}>
               <CheckCircle2 size={40} style={{ color: '#34d399', opacity: 0.7 }} />
-              <span style={{ fontSize: '0.9rem', fontWeight: '600', color: 'var(--text-main)' }}>Semua Beres!</span>
+              <span style={{ fontSize: '0.9rem', fontWeight: '600', color: 'var(--text-main)' }}>Kosong</span>
               <span style={{ fontSize: '0.8rem' }}>
-                {userRole === 'cs' ? 'Tidak ada konten baru yang perlu diposting saat ini.' : 'Tidak ada konten berstatus UPLOADED yang perlu ditinjau.'}
+                Tidak ada konten dengan status {statusFilter === 'ALL' ? 'apapun' : statusFilter} saat ini.
               </span>
             </div>
           ) : (
@@ -618,10 +693,10 @@ export default function TeamWorkflow() {
               paddingRight: '0.25rem',
               paddingBottom: '1rem'
             }}>
-              {files.map((file) => (
+              {filteredFiles.map((file) => (
                 <div
                   key={file.id}
-                  onClick={() => userRole === 'cs' && setSelectedFile(file)}
+                  onClick={() => userRole === 'cs' && file.status === 'PENDING' && setSelectedFile(file)}
                   style={{
                     background: 'rgba(255, 255, 255, 0.03)',
                     border: '1px solid',
@@ -631,7 +706,7 @@ export default function TeamWorkflow() {
                     display: 'flex',
                     flexDirection: 'column',
                     transition: 'all 0.2s ease',
-                    cursor: userRole === 'cs' ? 'pointer' : 'default',
+                    cursor: (userRole === 'cs' && file.status === 'PENDING') ? 'pointer' : 'default',
                     boxShadow: selectedFile?.id === file.id ? '0 0 12px rgba(20, 184, 166, 0.15)' : 'none'
                   }}
                 >
@@ -649,14 +724,16 @@ export default function TeamWorkflow() {
                       position: 'absolute',
                       bottom: '0.4rem',
                       left: '0.4rem',
-                      background: 'rgba(0, 0, 0, 0.7)',
-                      color: 'var(--primary)',
+                      background: 'rgba(0, 0, 0, 0.75)',
+                      color: file.status === 'DONE' ? '#34d399' : file.status === 'UPLOADED' ? '#60a5fa' : '#fbbf24',
                       fontSize: '0.65rem',
                       padding: '0.15rem 0.4rem',
                       borderRadius: '4px',
-                      fontWeight: '600'
+                      fontWeight: '700',
+                      border: '1px solid',
+                      borderColor: file.status === 'DONE' ? 'rgba(16, 185, 129, 0.3)' : file.status === 'UPLOADED' ? 'rgba(59, 130, 246, 0.3)' : 'rgba(245, 158, 11, 0.3)'
                     }}>
-                      📁 PENDING
+                      {file.status === 'DONE' ? '✅ DONE' : file.status === 'UPLOADED' ? '📤 UPLOADED' : '📁 PENDING'}
                     </span>
                   </div>
 
@@ -676,35 +753,17 @@ export default function TeamWorkflow() {
                       )}
                     </div>
                     
-                    {/* Action buttons based on Role */}
+                    {/* Action buttons based on Role and Status */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginTop: '0.35rem' }}>
-                      {userRole === 'cs' ? (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            downloadImage(file);
-                          }}
-                          className="btn btn-outline"
-                          style={{
-                            padding: '0.25rem 0.5rem',
-                            fontSize: '0.7rem',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: '0.25rem',
-                            height: '26px'
-                          }}
-                        >
-                          <Download size={12} /> Unduh Gambar
-                        </button>
-                      ) : (
-                        // Project Leader Actions (Approve / Reject)
+                      {/* CS Actions */}
+                      {userRole === 'cs' && (
                         <>
-                          <a
-                            href={file.proof_link}
-                            target="_blank"
-                            rel="noreferrer"
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              downloadImage(file);
+                            }}
                             className="btn btn-outline"
                             style={{
                               padding: '0.25rem 0.5rem',
@@ -713,58 +772,114 @@ export default function TeamWorkflow() {
                               alignItems: 'center',
                               justifyContent: 'center',
                               gap: '0.25rem',
-                              borderColor: 'rgba(20, 184, 166, 0.25)',
-                              color: '#2dd4bf',
                               height: '26px'
                             }}
                           >
-                            <ExternalLink size={12} /> Cek Bukti Link
-                          </a>
-                          
-                          <div style={{ display: 'flex', gap: '0.35rem' }}>
-                            <button
-                              type="button"
-                              onClick={() => handleMarkDone(file.id)}
-                              className="btn btn-primary"
-                              disabled={actionStates[file.id]?.loading}
-                              style={{
-                                flex: 1,
-                                padding: '0.25rem 0.4rem',
-                                fontSize: '0.7rem',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: '0.15rem',
-                                height: '26px'
-                              }}
-                            >
-                              {actionStates[file.id]?.loading ? (
-                                <div className="loading-spinner" style={{ width: '8px', height: '8px', borderWidth: '1px' }}></div>
-                              ) : (
-                                'Setuju'
+                            <Download size={12} /> Unduh Gambar
+                          </button>
+                          {file.status === 'UPLOADED' && (
+                            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textAlign: 'center' }}>
+                              Menunggu persetujuan leader
+                            </span>
+                          )}
+                          {file.status === 'DONE' && (
+                            <span style={{ fontSize: '0.68rem', color: '#34d399', textAlign: 'center', fontWeight: '600' }}>
+                              Selesai disetujui
+                            </span>
+                          )}
+                        </>
+                      )}
+
+                      {/* Project Leader / Admin Actions */}
+                      {(userRole === 'leader' || userRole === 'admin') && (
+                        <>
+                          {file.status === 'PENDING' && (
+                            <div style={{ fontSize: '0.68rem', color: '#fbbf24', textAlign: 'center', padding: '0.25rem 0', background: 'rgba(245, 158, 11, 0.05)', borderRadius: '4px', border: '1px dashed rgba(245, 158, 11, 0.2)' }}>
+                              ⏳ Menunggu CS Upload
+                            </div>
+                          )}
+
+                          {file.status === 'DONE' && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                              <div style={{ fontSize: '0.68rem', color: '#34d399', textAlign: 'center', padding: '0.25rem 0', background: 'rgba(16, 185, 129, 0.05)', borderRadius: '4px', border: '1px dashed rgba(16, 185, 129, 0.2)' }}>
+                                ✅ Selesai disetujui
+                              </div>
+                              {file.leader_name && (
+                                <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', textAlign: 'center' }}>
+                                  Oleh: {file.leader_name}
+                                </span>
                               )}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleRejectFile(file.id)}
-                              className="btn btn-outline"
-                              disabled={actionStates[file.id]?.loading}
-                              style={{
-                                flex: 1,
-                                padding: '0.25rem 0.4rem',
-                                fontSize: '0.7rem',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: '0.15rem',
-                                borderColor: 'rgba(239, 68, 68, 0.3)',
-                                color: '#f87171',
-                                height: '26px'
-                              }}
-                            >
-                              Tolak
-                            </button>
-                          </div>
+                            </div>
+                          )}
+
+                          {file.status === 'UPLOADED' && (
+                            <>
+                              <a
+                                href={file.proof_link}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="btn btn-outline"
+                                style={{
+                                  padding: '0.25rem 0.5rem',
+                                  fontSize: '0.7rem',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: '0.25rem',
+                                  borderColor: 'rgba(20, 184, 166, 0.25)',
+                                  color: '#2dd4bf',
+                                  height: '26px'
+                                }}
+                              >
+                                <ExternalLink size={12} /> Cek Bukti Link
+                              </a>
+                              
+                              <div style={{ display: 'flex', gap: '0.35rem' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleMarkDone(file.id)}
+                                  className="btn btn-primary"
+                                  disabled={actionStates[file.id]?.loading}
+                                  style={{
+                                    flex: 1,
+                                    padding: '0.25rem 0.4rem',
+                                    fontSize: '0.7rem',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '0.15rem',
+                                    height: '26px'
+                                  }}
+                                >
+                                  {actionStates[file.id]?.loading ? (
+                                    <div className="loading-spinner" style={{ width: '8px', height: '8px', borderWidth: '1px' }}></div>
+                                  ) : (
+                                    'Setuju'
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRejectFile(file.id)}
+                                  className="btn btn-outline"
+                                  disabled={actionStates[file.id]?.loading}
+                                  style={{
+                                    flex: 1,
+                                    padding: '0.25rem 0.4rem',
+                                    fontSize: '0.7rem',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '0.15rem',
+                                    borderColor: 'rgba(239, 68, 68, 0.3)',
+                                    color: '#f87171',
+                                    height: '26px'
+                                  }}
+                                >
+                                  Tolak
+                                </button>
+                              </div>
+                            </>
+                          )}
                         </>
                       )}
                     </div>

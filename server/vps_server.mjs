@@ -283,6 +283,23 @@ app.put('/api/content/mark-uploaded', authenticateJWT, requireRole(['cs', 'admin
   }
 });
 
+// Mendapatkan semua daftar konten (Untuk monitoring status penuh)
+app.get('/api/content/all', authenticateJWT, async (req, res) => {
+  try {
+    const query = `
+      SELECT m.*, u1.full_name as cs_name, u2.full_name as leader_name 
+      FROM media_contents m 
+      LEFT JOIN users u1 ON m.cs_id = u1.id 
+      LEFT JOIN users u2 ON m.leader_id = u2.id 
+      ORDER BY m.created_at DESC
+    `;
+    const result = await pool.query(query);
+    res.json({ success: true, files: result.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 4. Mendapatkan daftar gambar berstatus UPLOADED (Untuk Dashboard Project Leader)
 app.get('/api/content/uploaded', authenticateJWT, requireRole(['leader', 'admin']), async (req, res) => {
   try {
