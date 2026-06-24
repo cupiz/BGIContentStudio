@@ -736,6 +736,43 @@ export default function ImageGenerator() {
     }
   };
 
+  const registerFileToVPS = async (uploadRes, fileName) => {
+    const vpsUrl = localStorage.getItem('bgi_team_vps_url');
+    if (!vpsUrl) return;
+
+    try {
+      const fileId = uploadRes.fileId || uploadRes.id;
+      const fileUrl = uploadRes.url || (fileId ? `https://drive.google.com/open?id=${fileId}` : '');
+
+      if (!fileId) {
+        console.warn('[VPS Sync] fileId tidak ditemukan di respon Google Drive.');
+        return;
+      }
+
+      console.log(`[VPS Sync] Mendaftarkan file ${fileName} (${fileId}) ke VPS...`);
+      const regRes = await fetch(`${vpsUrl}/api/content/register`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          gdrive_file_id: fileId,
+          file_name: fileName,
+          gdrive_url: fileUrl
+        })
+      });
+
+      if (!regRes.ok) {
+        const errData = await regRes.json().catch(() => ({}));
+        console.warn('[VPS Sync] Gagal registrasi ke database VPS:', errData.error || regRes.statusText);
+      } else {
+        console.log('[VPS Sync] File berhasil diregistrasikan ke VPS.');
+      }
+    } catch (vpsErr) {
+      console.warn('[VPS Sync] Terjadi kesalahan saat sinkronisasi VPS:', vpsErr.message);
+    }
+  };
+
   const handleSaveImageToDrive = async (promptId, slideNumber) => {
     const folderUrl = localStorage.getItem('bgi_gdrive_folder_url') || '';
     if (!folderUrl) {
@@ -782,6 +819,7 @@ export default function ImageGenerator() {
 
       if (uploadRes.success) {
         setStatus(`✅ Slide ${slideNumber} berhasil disimpan ke Google Drive!`);
+        await registerFileToVPS(uploadRes, fileName);
       } else {
         throw new Error(uploadRes.error || 'Gagal menulis file.');
       }
@@ -856,6 +894,7 @@ export default function ImageGenerator() {
 
         if (uploadRes.success) {
           successCount++;
+          await registerFileToVPS(uploadRes, fileName);
         } else {
           failedCount++;
         }

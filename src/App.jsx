@@ -7,6 +7,7 @@ import HookGenerator from './components/HookGenerator';
 import CaptionGenerator from './components/CaptionGenerator';
 import ImageGenerator from './components/ImageGenerator';
 import Settings from './components/Settings';
+import TeamWorkflow from './components/TeamWorkflow';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -50,6 +51,8 @@ export default function App() {
         return <CaptionGenerator />;
       case 'images':
         return <ImageGenerator />;
+      case 'team-workflow':
+        return <TeamWorkflow />;
       case 'settings':
         return <Settings />;
       default:

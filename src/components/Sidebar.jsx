@@ -6,7 +6,8 @@ import {
   Zap, 
   MessageSquare, 
   Image, 
-  Settings as SettingsIcon 
+  Settings as SettingsIcon,
+  Users
 } from 'lucide-react';
 
 export default function Sidebar({ activeTab, setActiveTab }) {
@@ -94,6 +95,7 @@ export default function Sidebar({ activeTab, setActiveTab }) {
     { id: 'hooks', name: 'Hook Studio', icon: Zap },
     { id: 'captions', name: 'Caption Craft', icon: MessageSquare },
     { id: 'images', name: 'Image Studio', icon: Image },
+    { id: 'team-workflow', name: 'Team Workflow', icon: Users },
     { id: 'settings', name: 'Settings', icon: SettingsIcon },
   ];
 
