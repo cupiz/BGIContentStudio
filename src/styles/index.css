@@ -260,7 +260,43 @@ h1, h2, h3, h4, h5, h6 {
     border: none;
     padding: 0;
   }
+  .openrouter-balance {
+    display: none;
+  }
   .main-content {
     margin-left: 70px;
   }
+}
+
+/* OpenRouter Balance Styles */
+.openrouter-balance {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.7rem;
+  padding: 0.35rem 0.5rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+}
+
+.balance-label {
+  color: var(--text-muted);
+}
+
+.balance-value {
+  font-weight: 700;
+  color: #34d399; /* Green success accent */
+}
+
+.balance-value.loading {
+  color: var(--text-muted);
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { opacity: 0.6; }
+  50% { opacity: 1; }
+  100% { opacity: 0.6; }
 }

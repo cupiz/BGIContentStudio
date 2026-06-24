@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   LayoutDashboard, 
   Target, 
@@ -10,7 +10,64 @@ import {
 } from 'lucide-react';
 
 export default function Sidebar({ activeTab, setActiveTab }) {
-  const creatorName = localStorage.getItem('bgi_creator_name') || 'Creator';
+  const [creatorName, setCreatorName] = useState('Creator');
+  const [balance, setBalance] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const fetchBalance = useCallback(async () => {
+    const key = localStorage.getItem('bgi_openrouter_api_key');
+    if (!key) {
+      setBalance(null);
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/key', {
+        headers: {
+          'Authorization': `Bearer ${key}`
+        }
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json && json.data) {
+          const data = json.data;
+          if (data.limit_remaining !== undefined && data.limit_remaining !== null) {
+            setBalance(`$${parseFloat(data.limit_remaining).toFixed(4)}`);
+          } else if (data.limit !== undefined && data.limit === null) {
+            setBalance('No Limit');
+          } else {
+            setBalance('Active');
+          }
+        } else {
+          setBalance('Error');
+        }
+      } else {
+        setBalance('Invalid Key');
+      }
+    } catch (e) {
+      console.error('Error fetching OpenRouter balance:', e);
+      setBalance('Offline');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // Load initial values
+    setCreatorName(localStorage.getItem('bgi_creator_name') || 'Creator');
+    fetchBalance();
+
+    const handleStorageChange = () => {
+      setCreatorName(localStorage.getItem('bgi_creator_name') || 'Creator');
+      fetchBalance();
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+    };
+  }, [fetchBalance]);
   
   const menuItems = [
     { id: 'dashboard', name: 'Dashboard Tracker', icon: LayoutDashboard },
@@ -26,7 +83,18 @@ export default function Sidebar({ activeTab, setActiveTab }) {
     <div className="sidebar">
       <div>
         <div className="sidebar-brand">
-          <div className="sidebar-logo">B</div>
+          <img 
+            src="/icon.png" 
+            alt="BGI Logo" 
+            className="sidebar-logo" 
+            style={{ 
+              objectFit: 'contain', 
+              padding: '4px', 
+              background: 'rgba(255, 255, 255, 0.03)', 
+              border: '1px solid var(--border-color)',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)'
+            }} 
+          />
           <span className="sidebar-title">BGI Studio</span>
         </div>
         
@@ -49,6 +117,19 @@ export default function Sidebar({ activeTab, setActiveTab }) {
       </div>
 
       <div className="sidebar-footer">
+        {localStorage.getItem('bgi_openrouter_api_key') && (
+          <div 
+            className="openrouter-balance" 
+            title="Klik untuk menyegarkan saldo OpenRouter Anda"
+            onClick={fetchBalance}
+            style={{ cursor: 'pointer' }}
+          >
+            <span className="balance-label">OpenRouter:</span>
+            <span className={`balance-value ${loading ? 'loading' : ''}`}>
+              {loading ? 'Loading...' : balance || 'Refresh'}
+            </span>
+          </div>
+        )}
         <div className="creator-badge">
           <div className="creator-avatar">
             {creatorName.charAt(0).toUpperCase()}
