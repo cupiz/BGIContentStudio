@@ -38,7 +38,7 @@ jobs:
       - name: Get version
         id: version
         shell: bash
-        run: echo "VERSION=$(node -p \"require('./package.json').version\")" >> $GITHUB_OUTPUT
+        run: VERSION=$(node -p "require('./package.json').version") && echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -60,16 +60,9 @@ jobs:
         id: version
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          # Check if tag already exists, if so bump patch version
-          if git rev-parse "v$VERSION" >/dev/null 2>&1 || curl -s -o /dev/null -w '%{http_code}' "https://api.github.com/repos/${{ github.repository }}/git/ref/tags/v$VERSION" | grep -q 200; then
-            # Auto-increment patch version
-            PATCH=$(echo $VERSION | cut -d. -f3)
-            MINOR=$(echo $VERSION | cut -d. -f2)
-            MAJOR=$(echo $VERSION | cut -d. -f1)
-            NEW_PATCH=$((PATCH + 1))
-            VERSION="$MAJOR.$MINOR.$NEW_PATCH"
-            echo "Bumped version to $VERSION"
-          fi
+          while git tag -l "v$VERSION" | grep -q .; do
+            VERSION=$(echo $VERSION | awk -F. '{$NF++; print}' OFS=.)
+          done
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Download artifact
