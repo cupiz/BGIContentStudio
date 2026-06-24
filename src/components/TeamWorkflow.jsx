@@ -45,6 +45,14 @@ export default function TeamWorkflow() {
   // Action states for Project Leader
   const [actionStates, setActionStates] = useState({}); // { [fileId]: { loading: boolean } }
 
+  // Admin inputs for adding new members
+  const [newUsername, setNewUsername] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newFullName, setNewFullName] = useState('');
+  const [newRole, setNewRole] = useState('cs');
+  const [submittingUser, setSubmittingUser] = useState(false);
+  const [userSuccessMessage, setUserSuccessMessage] = useState('');
+
   // Sync GDrive files not yet in VPS database
   const syncGDriveFilesToVPS = async (dbFiles, activeToken = token, url = vpsUrl) => {
     const folderUrl = localStorage.getItem('bgi_gdrive_folder_url') || '';
@@ -198,6 +206,52 @@ export default function TeamWorkflow() {
       loadFiles();
     }
   }, [token]);
+
+  // Handle Add New Member (Admin only)
+  const handleAddUser = async (e) => {
+    e.preventDefault();
+    if (!newUsername.trim() || !newPassword.trim() || !newFullName.trim() || !newRole) {
+      setError('Harap lengkapi semua field pendaftaran.');
+      return;
+    }
+
+    setSubmittingUser(true);
+    setError('');
+    setUserSuccessMessage('');
+
+    try {
+      const response = await fetch(`${vpsUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          username: newUsername.trim(),
+          password: newPassword,
+          full_name: newFullName.trim(),
+          role: newRole
+        })
+      });
+
+      const resJson = await response.json();
+      if (!response.ok) {
+        throw new Error(resJson.error || 'Gagal menambahkan anggota tim.');
+      }
+
+      setUserSuccessMessage(`✅ Akun ${resJson.user.username} (${resJson.user.role}) berhasil ditambahkan!`);
+      setNewUsername('');
+      setNewPassword('');
+      setNewFullName('');
+      setNewRole('cs');
+    } catch (err) {
+      console.error(err);
+      setError(`Gagal menambahkan anggota baru: ${err.message}`);
+    } finally {
+      setSubmittingUser(false);
+      setTimeout(() => setUserSuccessMessage(''), 5000);
+    }
+  };
 
   // Handle Login
   const handleLogin = async (e) => {
@@ -519,7 +573,7 @@ export default function TeamWorkflow() {
       )}
 
       {/* Main Board Layout */}
-      <div className="grid-2" style={{ gridTemplateColumns: userRole === 'cs' ? '1fr 380px' : '1fr', gap: '1.5rem', marginTop: '1.5rem' }}>
+      <div className="grid-2" style={{ gridTemplateColumns: (userRole === 'cs' || userRole === 'admin') ? '1fr 380px' : '1fr', gap: '1.5rem', marginTop: '1.5rem' }}>
         
         {/* Left Column: Media queue List */}
         <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', minHeight: '500px' }}>
@@ -798,6 +852,132 @@ export default function TeamWorkflow() {
                 </span>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Right Column: Admin User Management panel */}
+        {userRole === 'admin' && (
+          <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', height: 'fit-content' }}>
+            <h2 className="card-title" style={{ margin: 0, borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
+              ➕ Tambah Anggota Tim
+            </h2>
+            
+            {userSuccessMessage && (
+              <p style={{ color: '#34d399', fontSize: '0.85rem', marginBottom: '1.25rem', background: 'rgba(52,211,153,0.08)', padding: '0.6rem 0.8rem', borderRadius: '8px' }}>
+                {userSuccessMessage}
+              </p>
+            )}
+
+            <form onSubmit={handleAddUser} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Username</label>
+                <input
+                  type="text"
+                  className="input-text"
+                  value={newUsername}
+                  onChange={(e) => setNewUsername(e.target.value)}
+                  placeholder="Contoh: budi_cs"
+                  style={{ height: '36px', fontSize: '0.85rem' }}
+                  required
+                />
+              </div>
+
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Nama Lengkap</label>
+                <input
+                  type="text"
+                  className="input-text"
+                  value={newFullName}
+                  onChange={(e) => setNewFullName(e.target.value)}
+                  placeholder="Contoh: Budi Cahyono"
+                  style={{ height: '36px', fontSize: '0.85rem' }}
+                  required
+                />
+              </div>
+
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Password</label>
+                <input
+                  type="password"
+                  className="input-text"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="Minimal 6 karakter"
+                  style={{ height: '36px', fontSize: '0.85rem' }}
+                  required
+                />
+              </div>
+
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.4rem', display: 'block' }}>Peran (Role)</label>
+                <div style={{ display: 'flex', gap: '0.35rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => setNewRole('cs')}
+                    className="btn"
+                    style={{
+                      flex: 1,
+                      height: '32px',
+                      fontSize: '0.75rem',
+                      padding: 0,
+                      borderColor: newRole === 'cs' ? 'var(--primary)' : 'rgba(255, 255, 255, 0.08)',
+                      background: newRole === 'cs' ? 'rgba(20, 184, 166, 0.15)' : 'rgba(255, 255, 255, 0.02)',
+                      color: newRole === 'cs' ? 'var(--primary)' : 'var(--text-main)',
+                      fontWeight: newRole === 'cs' ? '600' : 'normal'
+                    }}
+                  >
+                    CS
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewRole('leader')}
+                    className="btn"
+                    style={{
+                      flex: 1,
+                      height: '32px',
+                      fontSize: '0.75rem',
+                      padding: 0,
+                      borderColor: newRole === 'leader' ? 'var(--primary)' : 'rgba(255, 255, 255, 0.08)',
+                      background: newRole === 'leader' ? 'rgba(20, 184, 166, 0.15)' : 'rgba(255, 255, 255, 0.02)',
+                      color: newRole === 'leader' ? 'var(--primary)' : 'var(--text-main)',
+                      fontWeight: newRole === 'leader' ? '600' : 'normal'
+                    }}
+                  >
+                    Leader
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewRole('admin')}
+                    className="btn"
+                    style={{
+                      flex: 1,
+                      height: '32px',
+                      fontSize: '0.75rem',
+                      padding: 0,
+                      borderColor: newRole === 'admin' ? 'var(--primary)' : 'rgba(255, 255, 255, 0.08)',
+                      background: newRole === 'admin' ? 'rgba(20, 184, 166, 0.15)' : 'rgba(255, 255, 255, 0.02)',
+                      color: newRole === 'admin' ? 'var(--primary)' : 'var(--text-main)',
+                      fontWeight: newRole === 'admin' ? '600' : 'normal'
+                    }}
+                  >
+                    Admin
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={submittingUser}
+                style={{ display: 'flex', justifyContent: 'center', height: '36px', alignItems: 'center', marginTop: '0.5rem', fontSize: '0.85rem' }}
+              >
+                {submittingUser ? (
+                  <div className="loading-spinner" style={{ width: '16px', height: '16px', borderWidth: '2px' }}></div>
+                ) : (
+                  'Buat Akun Anggota'
+                )}
+              </button>
+            </form>
           </div>
         )}
 

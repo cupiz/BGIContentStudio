@@ -134,6 +134,27 @@ app.post('/api/auth/register', async (req, res) => {
   }
 
   try {
+    // Keamanan: Jika sudah ada user, wajib menyertakan token Admin
+    const countRes = await pool.query('SELECT COUNT(*) FROM users');
+    const userCount = parseInt(countRes.rows[0].count, 10);
+    
+    if (userCount > 0) {
+      const authHeader = req.headers.authorization;
+      if (!authHeader) {
+        return res.status(401).json({ success: false, error: 'Akses ditolak. Token Admin tidak disertakan.' });
+      }
+      
+      const token = authHeader.split(' ')[1];
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        if (decoded.role !== 'admin') {
+          return res.status(403).json({ success: false, error: 'Akses ditolak. Hanya Administrator yang dapat menambahkan anggota baru.' });
+        }
+      } catch (err) {
+        return res.status(403).json({ success: false, error: 'Token Admin tidak valid atau kadaluwarsa.' });
+      }
+    }
+
     const passwordHash = await bcrypt.hash(password, 10);
     const result = await pool.query(
       'INSERT INTO users (username, password_hash, full_name, role) VALUES ($1, $2, $3, $4) RETURNING id, username, full_name, role',
