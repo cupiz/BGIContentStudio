@@ -1,0 +1,89 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Package Electron app
+        run: npx electron-packager . BGI-Content-Studio --platform=win32 --arch=x64 --out=release --overwrite
+
+      - name: Create ZIP archive
+        run: |
+          Compress-Archive -Path release/BGI-Content-Studio-win32-x64 -DestinationPath BGI-Content-Studio-win32-x64.zip
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: echo "VERSION=$(node -p \"require('./package.json').version\")" >> $GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BGI-Content-Studio-win32-x64
+          path: BGI-Content-Studio-win32-x64.zip
+          retention-days: 30
+
+  release:
+    needs: build-windows
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: BGI-Content-Studio-win32-x64
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.VERSION }}
+          name: BGI Content Studio v${{ steps.version.outputs.VERSION }}
+          body: |
+            ## BGI Content Studio v${{ steps.version.outputs.VERSION }}
+            
+            ### Cara Install:
+            1. Download file `BGI-Content-Studio-win32-x64.zip`
+            2. Extract folder `BGI-Content-Studio-win32-x64`
+            3. Jalankan `BGI-Content-Studio.exe`
+            4. Pertama kali buka akan otomatis download Chromium (~150MB)
+            
+            ### Catatan:
+            - Tidak perlu install Node.js atau apapun lagi
+            - User tinggal klik .exe langsung jalan
+          files: BGI-Content-Studio-win32-x64.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
