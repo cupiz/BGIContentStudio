@@ -23,6 +23,24 @@ export default function Sidebar({ activeTab, setActiveTab }) {
 
     setLoading(true);
     try {
+      // 1. Coba ambil saldo akun keseluruhan terlebih dahulu
+      const creditsRes = await fetch('https://openrouter.ai/api/v1/credits', {
+        headers: {
+          'Authorization': `Bearer ${key}`
+        }
+      });
+      
+      if (creditsRes.ok) {
+        const json = await creditsRes.json();
+        if (json && json.data) {
+          const { total_credits, total_usage } = json.data;
+          const remaining = total_credits - total_usage;
+          setBalance(`$${parseFloat(remaining).toFixed(4)}`);
+          return;
+        }
+      }
+
+      // 2. Jika gagal atau dibatasi, fallback ke info limit spesifik API Key
       const res = await fetch('https://openrouter.ai/api/v1/key', {
         headers: {
           'Authorization': `Bearer ${key}`
