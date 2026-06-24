@@ -274,7 +274,8 @@ function waitForServerReady(port, maxAttempts = 30, interval = 500) {
 // ===== Express Server =====
 function startServer() {
   return new Promise((resolve, reject) => {
-    const serverPath = path.join(__dirname, '..', 'server', 'scraper.mjs');
+    // Use start.cjs wrapper — Electron binary can't directly run .mjs ESM files
+    const serverPath = path.join(__dirname, '..', 'server', 'start.cjs');
     
     console.log('[Main] Starting Express server...');
     updateSplash(96, 'Memulai server...');
