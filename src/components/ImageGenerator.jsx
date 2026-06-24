@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Image, Sparkles, Copy, Trash2, ExternalLink, Upload, Plus, RefreshCw, Download } from 'lucide-react';
+import { Image, Sparkles, Copy, Trash2, ExternalLink, Upload, Plus, RefreshCw, Download, AlertCircle } from 'lucide-react';
 import { generateSingleImagePrompt, analyzeImageWithGeminiAPI } from '../services/gemini';
 import { generateImageWithOpenRouter, base64ToBlobUrl } from '../services/openrouter';
 
@@ -50,6 +50,12 @@ export default function ImageGenerator() {
   const [gdriveAccessToken, setGdriveAccessToken] = useState('');
   const [savingStates, setSavingStates] = useState({});
   const [isSavingAll, setIsSavingAll] = useState(false);
+
+  // Gallery states
+  const [activeRightTab, setActiveRightTab] = useState('prompts'); // 'prompts' or 'gallery'
+  const [galleryFiles, setGalleryFiles] = useState([]);
+  const [loadingGallery, setLoadingGallery] = useState(false);
+  const [galleryError, setGalleryError] = useState('');
 
   // Sync Google Drive settings from localStorage, including storage events
   useEffect(() => {
@@ -868,6 +874,81 @@ export default function ImageGenerator() {
     setTimeout(() => setStatus(''), 5000);
   };
 
+  const loadGDriveGallery = async () => {
+    const folderUrl = localStorage.getItem('bgi_gdrive_folder_url') || '';
+    if (!folderUrl) {
+      setGalleryError('Google Drive belum dikonfigurasi. Silakan masuk ke menu Pengaturan terlebih dahulu.');
+      return;
+    }
+
+    setLoadingGallery(true);
+    setGalleryError('');
+    try {
+      const mode = localStorage.getItem('bgi_gdrive_mode') || 'apps-script';
+      const folderId = extractGDriveFolderId(folderUrl);
+      if (!folderId) throw new Error('ID Folder Google Drive tidak valid.');
+
+      let files = [];
+      if (mode === 'apps-script') {
+        const appsScriptUrl = localStorage.getItem('bgi_gdrive_apps_script_url') || '';
+        if (!appsScriptUrl) throw new Error('URL Web App Google Apps Script belum diatur.');
+
+        const url = `${appsScriptUrl}?folderId=${folderId}`;
+        const response = await fetch(url, { method: 'GET' });
+        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+        const resJson = await response.json();
+        if (!resJson.success) throw new Error(resJson.error || 'Gagal memuat file.');
+        files = resJson.files || [];
+      } else {
+        // Direct GDrive API
+        const accessToken = localStorage.getItem('bgi_gdrive_access_token') || '';
+        if (!accessToken) throw new Error('Access Token Google Drive tidak ditemukan.');
+
+        const subfoldersUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(`'${folderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`)}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+        const subfoldersRes = await fetch(subfoldersUrl, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (subfoldersRes.status === 401) throw new Error('Access Token kedaluwarsa. Silakan perbarui di menu Pengaturan.');
+        const subfoldersJson = await subfoldersRes.json();
+
+        const parentIds = [folderId];
+        const folderNames = { [folderId]: 'Root' };
+        if (subfoldersJson.files) {
+          subfoldersJson.files.forEach(f => {
+            parentIds.push(f.id);
+            folderNames[f.id] = f.name;
+          });
+        }
+
+        const parentOrQuery = parentIds.map(id => `'${id}' in parents`).join(' or ');
+        const filesQuery = `mimeType contains 'image/' and (${parentOrQuery}) and trashed = false`;
+        const filesUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(filesQuery)}&fields=files(id,name,webViewLink,createdTime,parents)&orderBy=createdTime%20desc&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+        
+        const filesRes = await fetch(filesUrl, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        const filesJson = await filesRes.json();
+        files = (filesJson.files || []).map(f => {
+          const parentId = f.parents ? f.parents[0] : '';
+          return {
+            id: f.id,
+            name: f.name,
+            thumbnail: `https://lh3.googleusercontent.com/d/${f.id}=w400`,
+            url: f.webViewLink,
+            date: folderNames[parentId] || 'Lainnya',
+            created: new Date(f.createdTime).getTime()
+          };
+        });
+      }
+      setGalleryFiles(files);
+    } catch (err) {
+      console.error(err);
+      setGalleryError(`Gagal memuat galeri: ${err.message}`);
+    } finally {
+      setLoadingGallery(false);
+    }
+  };
+
   // Clear all
   const handleClearAll = () => {
     // Revoke all blob URLs
@@ -1344,11 +1425,56 @@ export default function ImageGenerator() {
           </div>
         </div>
 
-        {/* Right Panel: Prompt List */}
-        <div className="glass-card" style={{ display: 'flex', flexDirection: 'column' }}>
-          <h2 className="card-title" style={{ justifyContent: 'space-between' }}>
-            <span>Daftar Prompt ({prompts.length})</span>
-            {prompts.length > 0 && (
+        {/* Right Panel: Prompt List / GDrive Gallery */}
+        <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', minHeight: '500px' }}>
+          
+          {/* Tab Navigation */}
+          <div style={{ display: 'flex', borderBottom: '1px solid rgba(255, 255, 255, 0.08)', marginBottom: '1.25rem', paddingBottom: '0.25rem', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button
+                type="button"
+                onClick={() => setActiveRightTab('prompts')}
+                style={{
+                  padding: '0.5rem 1rem',
+                  background: activeRightTab === 'prompts' ? 'rgba(20, 184, 166, 0.15)' : 'transparent',
+                  border: 'none',
+                  borderRadius: '6px',
+                  color: activeRightTab === 'prompts' ? 'var(--primary)' : 'var(--text-secondary)',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  fontSize: '0.82rem',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                Daftar Prompt ({prompts.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveRightTab('gallery');
+                  loadGDriveGallery();
+                }}
+                style={{
+                  padding: '0.5rem 1rem',
+                  background: activeRightTab === 'gallery' ? 'rgba(20, 184, 166, 0.15)' : 'transparent',
+                  border: 'none',
+                  borderRadius: '6px',
+                  color: activeRightTab === 'gallery' ? 'var(--primary)' : 'var(--text-secondary)',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  fontSize: '0.82rem',
+                  transition: 'all 0.2s ease',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.35rem'
+                }}
+              >
+                📁 Galeri Google Drive
+              </button>
+            </div>
+
+            {/* Prompt Actions */}
+            {activeRightTab === 'prompts' && prompts.length > 0 && (
               <div style={{ display: 'flex', gap: '0.4rem' }}>
                 {contentFormat.toLowerCase().includes('carousel') && (
                   <button
@@ -1378,213 +1504,353 @@ export default function ImageGenerator() {
                 </button>
               </div>
             )}
-          </h2>
 
-          {prompts.length > 0 ? (
-            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingRight: '0.25rem' }}>
-              {prompts.map((item, idx) => (
-                <div key={item.id} className="prompt-card">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
-                      <span style={{
-                        fontSize: '0.7rem',
-                        fontWeight: '700',
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.05em',
-                        color: 'var(--primary)',
-                        background: 'rgba(99,102,241,0.12)',
-                        padding: '0.15rem 0.5rem',
-                        borderRadius: '999px',
-                      }}>
-                        Slide {item.slide || idx + 1}
-                      </span>
-                      {item.visualStyle && (
+            {/* Gallery Actions */}
+            {activeRightTab === 'gallery' && (
+              <button
+                type="button"
+                onClick={loadGDriveGallery}
+                className="btn btn-outline"
+                disabled={loadingGallery}
+                style={{ padding: '0.35rem 0.65rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+              >
+                <RefreshCw size={12} className={loadingGallery ? 'spin-animation' : ''} style={{ animation: loadingGallery ? 'spin 1s linear infinite' : 'none' }} />
+                Refresh Galeri
+              </button>
+            )}
+          </div>
+
+          {activeRightTab === 'gallery' ? (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+              {loadingGallery ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, minHeight: '300px', gap: '1rem' }}>
+                  <div className="loading-spinner" style={{ width: '40px', height: '40px', borderWidth: '3px' }}></div>
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Membaca galeri Google Drive...</span>
+                </div>
+              ) : galleryError ? (
+                <div style={{
+                  padding: '1.25rem',
+                  borderRadius: '8px',
+                  border: '1px solid rgba(239, 68, 68, 0.2)',
+                  background: 'rgba(239, 68, 68, 0.05)',
+                  color: '#f87171',
+                  fontSize: '0.85rem',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '0.75rem',
+                  margin: '1rem 0'
+                }}>
+                  <AlertCircle size={18} style={{ flexShrink: 0, marginTop: '0.1rem' }} />
+                  <div>
+                    <div style={{ fontWeight: '600', marginBottom: '0.25rem' }}>Gagal Memuat File</div>
+                    <div>{galleryError}</div>
+                  </div>
+                </div>
+              ) : galleryFiles.length === 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, minHeight: '300px', color: 'var(--text-muted)', gap: '0.5rem' }}>
+                  <Image size={40} style={{ opacity: 0.3 }} />
+                  <span style={{ fontSize: '0.85rem' }}>Tidak ada gambar yang ditemukan di folder Google Drive ini.</span>
+                </div>
+              ) : (
+                <div className="gallery-grid" style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+                  gap: '1rem',
+                  maxHeight: '75vh',
+                  overflowY: 'auto',
+                  paddingRight: '0.25rem',
+                  paddingBottom: '1rem'
+                }}>
+                  {galleryFiles.map((file) => (
+                    <div
+                      key={file.id}
+                      style={{
+                        background: 'rgba(255, 255, 255, 0.03)',
+                        border: '1px solid rgba(255, 255, 255, 0.08)',
+                        borderRadius: '8px',
+                        overflow: 'hidden',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        transition: 'all 0.2s ease',
+                        position: 'relative'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = 'rgba(20, 184, 166, 0.3)';
+                        e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.08)';
+                        e.currentTarget.style.background = 'rgba(255, 255, 255, 0.03)';
+                      }}
+                    >
+                      {/* Image Thumbnail Container */}
+                      <div style={{ width: '100%', height: '140px', position: 'relative', overflow: 'hidden', background: 'rgba(0, 0, 0, 0.2)' }}>
+                        <img
+                          src={file.thumbnail || 'https://placehold.co/400x300?text=GDrive+Image'}
+                          alt={file.name}
+                          onError={(e) => {
+                            e.target.src = 'https://placehold.co/400x300?text=Drive+Image';
+                          }}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        />
                         <span style={{
-                          fontSize: '0.65rem',
+                          position: 'absolute',
+                          bottom: '0.4rem',
+                          left: '0.4rem',
+                          background: 'rgba(0, 0, 0, 0.7)',
                           color: '#2dd4bf',
-                          background: 'rgba(20,184,166,0.1)',
-                          padding: '0.1rem 0.4rem',
-                          borderRadius: '999px',
-                          border: '1px solid rgba(20,184,166,0.2)',
+                          fontSize: '0.65rem',
+                          padding: '0.15rem 0.4rem',
+                          borderRadius: '4px',
+                          fontWeight: '600'
                         }}>
-                          {item.visualStyle}
+                          📅 {file.date}
                         </span>
-                      )}
-                      {item.hook && (
-                        <span className="hook-label">
-                          {item.hook}
+                      </div>
+
+                      {/* Info & Open Button */}
+                      <div style={{ padding: '0.6rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', flex: 1, justifyContent: 'space-between' }}>
+                        <span
+                          title={file.name}
+                          style={{ fontSize: '0.72rem', color: 'var(--text-main)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: '1.3', fontWeight: '500' }}
+                        >
+                          {file.name}
                         </span>
-                      )}
+                        
+                        <a
+                          href={file.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="btn btn-outline"
+                          style={{
+                            padding: '0.3rem 0.5rem',
+                            fontSize: '0.68rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '0.25rem',
+                            borderColor: 'rgba(20, 184, 166, 0.25)',
+                            color: '#2dd4bf',
+                            height: '24px'
+                          }}
+                        >
+                          <ExternalLink size={10} /> Buka Gambar
+                        </a>
+                      </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '0.25rem' }}>
-                      <button
-                        onClick={() => handleCopyPrompt(item.text)}
-                        className="btn btn-outline"
-                        style={{ padding: '0.2rem 0.4rem', fontSize: '0.7rem' }}
-                        title="Salin prompt"
-                      >
-                        <Copy size={12} />
-                      </button>
-                      <button
-                        onClick={() => handleRemovePrompt(item.id)}
-                        className="btn btn-outline"
-                        style={{ padding: '0.2rem 0.4rem', fontSize: '0.7rem', borderColor: 'rgba(239,68,68,0.3)', color: '#f87171' }}
-                        title="Hapus prompt"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  </div>
-
-                  <textarea
-                    className="textarea-input"
-                    value={item.text}
-                    onChange={(e) => handleEditPrompt(item.id, e.target.value)}
-                    style={{
-                      minHeight: '280px',
-                      fontSize: '0.85rem',
-                      background: 'transparent',
-                      border: '1px solid transparent',
-                      padding: '0.5rem',
-                      resize: 'vertical',
-                    }}
-                    onFocus={(e) => e.target.style.borderColor = 'var(--primary)'}
-                    onBlur={(e) => e.target.style.borderColor = 'transparent'}
-                  />
-
-                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                    <button
-                      onClick={() => handleOpenGemini(item.text, item.id)}
-                      className="btn btn-primary"
-                      disabled={openingPromptId === item.id}
-                      style={{
-                        flex: 1,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '0.4rem',
-                        fontSize: '0.85rem',
-                        padding: '0.5rem 0.75rem',
-                        opacity: openingPromptId === item.id ? 0.6 : 1,
-                      }}
-                      title="Buka di Gemini (Paste manual)"
-                    >
-                      {openingPromptId === item.id ? (
-                        <><div className="loading-spinner"></div></>
-                      ) : (
-                        <><ExternalLink size={14} /> Gemini</>
-                      )}
-                    </button>
-                    <button
-                      onClick={() => handleOpenChatGPT(item.text, item.id)}
-                      className="btn btn-secondary"
-                      disabled={openingPromptId === item.id}
-                      style={{
-                        flex: 1,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '0.4rem',
-                        fontSize: '0.85rem',
-                        padding: '0.5rem 0.75rem',
-                        opacity: openingPromptId === item.id ? 0.6 : 1,
-                      }}
-                      title="Buka di ChatGPT (Terisi otomatis)"
-                    >
-                      {openingPromptId === item.id ? (
-                        <><div className="loading-spinner"></div></>
-                      ) : (
-                        <><ExternalLink size={14} /> ChatGPT</>
-                      )}
-                    </button>
-                    <button
-                      onClick={() => handleGenerateWithOpenRouter(item.text, item.id)}
-                      className="btn btn-outline"
-                      disabled={generatedImages[item.id]?.loading}
-                      style={{
-                        flex: 1,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '0.4rem',
-                        fontSize: '0.85rem',
-                        padding: '0.5rem 0.75rem',
-                        borderColor: 'rgba(20, 184, 166, 0.3)',
-                        color: '#2dd4bf',
-                        opacity: generatedImages[item.id]?.loading ? 0.6 : 1,
-                      }}
-                      title={`Generate dengan ${openRouterModel}`}
-                    >
-                      {generatedImages[item.id]?.loading ? (
-                        <><div className="loading-spinner" style={{ borderTopColor: '#2dd4bf' }}></div></>
-                      ) : (
-                        <><Download size={14} /> OpenRouter</>
-                      )}
-                    </button>
-                  </div>
-
-                  {/* Generated Image Preview */}
-                  {generatedImages[item.id]?.url && (
-                    <div style={{ marginTop: '0.75rem', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
-                      <img
-                        src={generatedImages[item.id].url}
-                        alt={`Generated for slide ${item.slide || idx + 1}`}
-                        style={{ width: '100%', maxHeight: '400px', objectFit: 'contain', background: 'rgba(0,0,0,0.3)' }}
-                      />
-                      <div style={{ padding: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)' }}>
-                        <span style={{ fontSize: '0.72rem', color: '#2dd4bf' }}>✅ Generated with {openRouterModel}</span>
-                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+              {prompts.length > 0 ? (
+                <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingRight: '0.25rem' }}>
+                  {prompts.map((item, idx) => (
+                    <div key={item.id} className="prompt-card">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                          <span style={{
+                            fontSize: '0.7rem',
+                            fontWeight: '700',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.05em',
+                            color: 'var(--primary)',
+                            background: 'rgba(99,102,241,0.12)',
+                            padding: '0.15rem 0.5rem',
+                            borderRadius: '999px',
+                          }}>
+                            Slide {item.slide || idx + 1}
+                          </span>
+                          {item.visualStyle && (
+                            <span style={{
+                              fontSize: '0.65rem',
+                              color: '#2dd4bf',
+                              background: 'rgba(20,184,166,0.1)',
+                              padding: '0.1rem 0.4rem',
+                              borderRadius: '999px',
+                              border: '1px solid rgba(20,184,166,0.2)',
+                            }}>
+                              {item.visualStyle}
+                            </span>
+                          )}
+                          {item.hook && (
+                            <span className="hook-label">
+                              {item.hook}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.25rem' }}>
                           <button
-                            onClick={() => handleSaveImageToDrive(item.id, item.slide || idx + 1)}
+                            onClick={() => handleCopyPrompt(item.text)}
                             className="btn btn-outline"
-                            disabled={savingStates[item.id]}
-                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', borderColor: 'rgba(168, 85, 247, 0.4)', color: '#a78bfa', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                            style={{ padding: '0.2rem 0.4rem', fontSize: '0.7rem' }}
+                            title="Salin prompt"
                           >
-                            {savingStates[item.id] ? (
-                              <div className="loading-spinner" style={{ borderTopColor: '#a78bfa', width: '10px', height: '10px', margin: 0 }}></div>
-                            ) : (
-                              '💾 Google Drive'
-                            )}
+                            <Copy size={12} />
                           </button>
                           <button
-                            onClick={() => {
-                              const link = document.createElement('a');
-                              link.href = generatedImages[item.id].url;
-                              link.download = `slide-${item.slide || idx + 1}.png`;
-                              link.click();
-                            }}
+                            onClick={() => handleRemovePrompt(item.id)}
                             className="btn btn-outline"
-                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+                            style={{ padding: '0.2rem 0.4rem', fontSize: '0.7rem', borderColor: 'rgba(239,68,68,0.3)', color: '#f87171' }}
+                            title="Hapus prompt"
                           >
-                            <Download size={12} /> Download
+                            <Trash2 size={12} />
                           </button>
                         </div>
                       </div>
-                    </div>
-                  )}
 
-                  {/* Generated Image Error */}
-                  {generatedImages[item.id]?.error && (
-                    <div style={{
-                      marginTop: '0.5rem',
-                      padding: '0.5rem',
-                      borderRadius: '6px',
-                      background: 'rgba(239,68,68,0.08)',
-                      border: '1px solid rgba(239,68,68,0.2)',
-                      fontSize: '0.75rem',
-                      color: '#f87171',
-                    }}>
-                      ⚠️ {generatedImages[item.id].error}
+                      <textarea
+                        className="textarea-input"
+                        value={item.text}
+                        onChange={(e) => handleEditPrompt(item.id, e.target.value)}
+                        style={{
+                          minHeight: '280px',
+                          fontSize: '0.85rem',
+                          background: 'transparent',
+                          border: '1px solid transparent',
+                          padding: '0.5rem',
+                          resize: 'vertical',
+                        }}
+                        onFocus={(e) => e.target.style.borderColor = 'var(--primary)'}
+                        onBlur={(e) => e.target.style.borderColor = 'transparent'}
+                      />
+
+                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                        <button
+                          onClick={() => handleOpenGemini(item.text, item.id)}
+                          className="btn btn-primary"
+                          disabled={openingPromptId === item.id}
+                          style={{
+                            flex: 1,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '0.4rem',
+                            fontSize: '0.85rem',
+                            padding: '0.5rem 0.75rem',
+                            opacity: openingPromptId === item.id ? 0.6 : 1,
+                          }}
+                          title="Buka di Gemini (Paste manual)"
+                        >
+                          {openingPromptId === item.id ? (
+                            <><div className="loading-spinner"></div></>
+                          ) : (
+                            <><ExternalLink size={14} /> Gemini</>
+                          )}
+                        </button>
+                        <button
+                          onClick={() => handleOpenChatGPT(item.text, item.id)}
+                          className="btn btn-secondary"
+                          disabled={openingPromptId === item.id}
+                          style={{
+                            flex: 1,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '0.4rem',
+                            fontSize: '0.85rem',
+                            padding: '0.5rem 0.75rem',
+                            opacity: openingPromptId === item.id ? 0.6 : 1,
+                          }}
+                          title="Buka di Gemini (Terisi otomatis)"
+                        >
+                          {openingPromptId === item.id ? (
+                            <><div className="loading-spinner"></div></>
+                          ) : (
+                            <><ExternalLink size={14} /> ChatGPT</>
+                          )}
+                        </button>
+                        <button
+                          onClick={() => handleGenerateWithOpenRouter(item.text, item.id)}
+                          className="btn btn-outline"
+                          disabled={generatedImages[item.id]?.loading}
+                          style={{
+                            flex: 1,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '0.4rem',
+                            fontSize: '0.85rem',
+                            padding: '0.5rem 0.75rem',
+                            borderColor: 'rgba(20, 184, 166, 0.3)',
+                            color: '#2dd4bf',
+                            opacity: generatedImages[item.id]?.loading ? 0.6 : 1,
+                          }}
+                          title={`Generate dengan ${openRouterModel}`}
+                        >
+                          {generatedImages[item.id]?.loading ? (
+                            <><div className="loading-spinner" style={{ borderTopColor: '#2dd4bf' }}></div></>
+                          ) : (
+                            <><Download size={14} /> OpenRouter</>
+                          )}
+                        </button>
+                      </div>
+
+                      {/* Generated Image Preview */}
+                      {generatedImages[item.id]?.url && (
+                        <div style={{ marginTop: '0.75rem', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
+                          <img
+                            src={generatedImages[item.id].url}
+                            alt={`Generated for slide ${item.slide || idx + 1}`}
+                            style={{ width: '100%', maxHeight: '400px', objectFit: 'contain', background: 'rgba(0,0,0,0.3)' }}
+                          />
+                          <div style={{ padding: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)' }}>
+                            <span style={{ fontSize: '0.72rem', color: '#2dd4bf' }}>✅ Generated with {openRouterModel}</span>
+                            <div style={{ display: 'flex', gap: '0.4rem' }}>
+                              <button
+                                onClick={() => handleSaveImageToDrive(item.id, item.slide || idx + 1)}
+                                className="btn btn-outline"
+                                disabled={savingStates[item.id]}
+                                style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', borderColor: 'rgba(168, 85, 247, 0.4)', color: '#a78bfa', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                              >
+                                {savingStates[item.id] ? (
+                                  <div className="loading-spinner" style={{ borderTopColor: '#a78bfa', width: '10px', height: '10px', margin: 0 }}></div>
+                                ) : (
+                                  '💾 Google Drive'
+                                )}
+                              </button>
+                              <button
+                                onClick={() => {
+                                  const link = document.createElement('a');
+                                  link.href = generatedImages[item.id].url;
+                                  link.download = `slide-${item.slide || idx + 1}.png`;
+                                  link.click();
+                                }}
+                                className="btn btn-outline"
+                                style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+                              >
+                                <Download size={12} /> Download
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Generated Image Error */}
+                      {generatedImages[item.id]?.error && (
+                        <div style={{
+                          marginTop: '0.5rem',
+                          padding: '0.5rem',
+                          borderRadius: '6px',
+                          background: 'rgba(239,68,68,0.08)',
+                          border: '1px solid rgba(239,68,68,0.2)',
+                          fontSize: '0.75rem',
+                          color: '#f87171',
+                        }}>
+                          ⚠️ {generatedImages[item.id].error}
+                        </div>
+                      )}
                     </div>
-                  )}
+                  ))}
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="empty-state" style={{ flex: 1 }}>
-              <Image size={40} style={{ color: 'var(--text-muted)' }} />
-              <h3>Belum Ada Prompt</h3>
-              <p>Parse dari Hook atau tambahkan prompt manual di panel kiri.</p>
+              ) : (
+                <div className="empty-state" style={{ flex: 1 }}>
+                  <Image size={40} style={{ color: 'var(--text-muted)' }} />
+                  <h3>Belum Ada Prompt</h3>
+                  <p>Parse dari Hook atau tambahkan prompt manual di panel kiri.</p>
+                </div>
+              )}
             </div>
           )}
 
