@@ -32,3 +32,13 @@ server/debug_profile.png
 
 # Browser profile untuk Playwright (besar, tidak perlu di-commit)
 .gemini-browser-profile/
+
+# Electron build output
+release/
+
+# Zip files
+*.zip
+
+# Windows reserved filenames
+nul
+NUL
