@@ -264,12 +264,18 @@ function startServer() {
     console.log('[Main] Starting Express server...');
     updateSplash(96, 'Memulai server...');
 
-    serverProcess = spawn('node', [serverPath], {
-      cwd: path.join(__dirname, '..'),
+    // In production (packaged app), 'node' is not in PATH.
+    // Electron binary IS Node.js — use process.execPath to run the server script.
+    const cmd = isDev ? 'node' : process.execPath;
+    const appDir = path.join(__dirname, '..');
+
+    serverProcess = spawn(cmd, [serverPath], {
+      cwd: appDir,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
-        NODE_ENV: isDev ? 'development' : 'production'
+        NODE_ENV: isDev ? 'development' : 'production',
+        BGI_SERVER_PORT: String(serverPort)
       }
     });
 
@@ -328,7 +334,8 @@ function createWindow() {
     mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools();
   } else {
-    mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+    // Load from Express server so relative /api/ URLs work (no Vite proxy in production)
+    mainWindow.loadURL(`http://localhost:${serverPort}`);
   }
 
   mainWindow.once('ready-to-show', () => {

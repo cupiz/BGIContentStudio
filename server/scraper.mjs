@@ -11,7 +11,17 @@ import path from 'path';
 import os from 'os';
 
 const app = express();
-const DEFAULT_PORT = 3001;
+const DEFAULT_PORT = parseInt(process.env.BGI_SERVER_PORT || '3001', 10);
+
+// ===== Serve frontend static files in production (Electron) =====
+// This allows the Electron window to load from http://localhost:PORT
+// so that relative /api/ fetch calls work correctly (no Vite proxy).
+const isProduction = process.env.NODE_ENV === 'production';
+const distPath = path.join(process.cwd(), 'dist');
+if (isProduction && fs.existsSync(distPath)) {
+  console.log(`[Server] Serving frontend from: ${distPath}`);
+  app.use(express.static(distPath));
+}
 
 app.use(cors());
 app.use(express.json({ limit: '200mb' }));
@@ -1408,6 +1418,17 @@ Format your response as:
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'BGI Scraper Server berjalan dengan baik!', version: '2.0' });
 });
+
+// ===== SPA catch-all: serve index.html for non-API routes in production =====
+if (isProduction && fs.existsSync(distPath)) {
+  app.get('*', (req, res) => {
+    if (!req.path.startsWith('/api')) {
+      res.sendFile(path.join(distPath, 'index.html'));
+    } else {
+      res.status(404).json({ error: 'API endpoint not found' });
+    }
+  });
+}
 
 // Error handling middleware
 app.use((err, req, res, next) => {
