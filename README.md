@@ -168,4 +168,4 @@ Set API Key di menu **Pengaturan (Settings)** dalam aplikasi.
 
 ## 📄 License
 
-Copyright © 2024 BGI. All rights reserved.
+Copyright © 2026 BGI. All rights reserved.
