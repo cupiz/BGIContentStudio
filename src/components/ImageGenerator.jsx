@@ -3,6 +3,23 @@ import { Image, Sparkles, Copy, Trash2, ExternalLink, Upload, Plus, RefreshCw, D
 import { generateSingleImagePrompt, analyzeImageWithGeminiAPI } from '../services/gemini';
 import { generateImageWithOpenRouter, base64ToBlobUrl } from '../services/openrouter';
 
+function extractGDriveFolderId(url) {
+  if (!url) return '';
+  url = url.trim();
+  const foldersMatch = url.match(/\/folders\/([a-zA-Z0-9-_]+)/);
+  if (foldersMatch && foldersMatch[1]) {
+    return foldersMatch[1];
+  }
+  const idMatch = url.match(/[?&]id=([a-zA-Z0-9-_]+)/);
+  if (idMatch && idMatch[1]) {
+    return idMatch[1];
+  }
+  if (/^[a-zA-Z0-9-_]+$/.test(url)) {
+    return url;
+  }
+  return '';
+}
+
 export default function ImageGenerator() {
   const [prompts, setPrompts] = useState([]);
   const [newPrompt, setNewPrompt] = useState('');
@@ -27,9 +44,34 @@ export default function ImageGenerator() {
   const [openRouterAspectRatio, setOpenRouterAspectRatio] = useState('1:1');
   const [generatedImages, setGeneratedImages] = useState({}); // { promptId: { loading, url, error } }
   const fileInputRef = useRef(null);
+  const [gdriveMode, setGdriveMode] = useState('apps-script');
+  const [gdriveFolderUrl, setGdriveFolderUrl] = useState('');
+  const [gdriveAppsScriptUrl, setGdriveAppsScriptUrl] = useState('');
+  const [gdriveAccessToken, setGdriveAccessToken] = useState('');
+  const [savingStates, setSavingStates] = useState({});
+  const [isSavingAll, setIsSavingAll] = useState(false);
+
+  // Sync Google Drive settings from localStorage, including storage events
+  useEffect(() => {
+    if (!localStorage.getItem('bgi_gdrive_folder_url')) {
+      localStorage.setItem('bgi_gdrive_folder_url', 'https://drive.google.com/drive/folders/1wrxFmI6qarsiBPvuqzuzzU433srw8WUT?usp=sharing');
+    }
+    const handleStorage = () => {
+      setGdriveMode(localStorage.getItem('bgi_gdrive_mode') || 'apps-script');
+      setGdriveFolderUrl(localStorage.getItem('bgi_gdrive_folder_url') || '');
+      setGdriveAppsScriptUrl(localStorage.getItem('bgi_gdrive_apps_script_url') || '');
+      setGdriveAccessToken(localStorage.getItem('bgi_gdrive_access_token') || '');
+    };
+    handleStorage();
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
 
   // Auto-fill hook text from Hook Studio on mount
   useEffect(() => {
+
     const savedHooks = localStorage.getItem('bgi_hooks_result');
     if (savedHooks) {
       setHookText(savedHooks);
@@ -534,6 +576,298 @@ export default function ImageGenerator() {
     setTimeout(() => setStatus(''), 5000);
   };
 
+  const uploadImageToGDrive = async (base64Data, fileName, mimeType) => {
+    const mode = localStorage.getItem('bgi_gdrive_mode') || 'apps-script';
+    const folderUrl = localStorage.getItem('bgi_gdrive_folder_url') || '';
+    const folderId = extractGDriveFolderId(folderUrl);
+
+    if (!folderId) {
+      throw new Error('Folder ID Google Drive tidak ditemukan atau tidak valid. Silakan atur URL Folder Google Drive di menu Pengaturan.');
+    }
+
+    const pad = (n) => String(n).padStart(2, '0');
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+
+    if (mode === 'apps-script') {
+      const appsScriptUrl = localStorage.getItem('bgi_gdrive_apps_script_url') || '';
+      if (!appsScriptUrl) {
+        throw new Error('URL Web App Google Apps Script tidak valid. Silakan atur di menu Pengaturan.');
+      }
+
+      // Avoid CORS preflight options request by using text/plain content type
+      const response = await fetch(appsScriptUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8'
+        },
+        body: JSON.stringify({
+          data: base64Data,
+          filename: fileName,
+          mimetype: mimeType,
+          folderId: folderId
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+
+      const resText = await response.text();
+      let resJson;
+      try {
+        resJson = JSON.parse(resText);
+      } catch (err) {
+        throw new Error(`Gagal memproses respon Apps Script: ${resText}`);
+      }
+
+      if (!resJson.success) {
+        throw new Error(resJson.error || 'Respon gagal dari Apps Script');
+      }
+
+      return resJson;
+    } else {
+      const accessToken = localStorage.getItem('bgi_gdrive_access_token') || '';
+      if (!accessToken) {
+        throw new Error('Access Token Google Drive tidak ditemukan. Silakan isi di menu Pengaturan.');
+      }
+
+      // 1. Check if YYYY-MM-DD subfolder exists
+      const query = encodeURIComponent(`'${folderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and name = '${todayStr}' and trashed = false`);
+      const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+      
+      const searchRes = await fetch(searchUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`
+        }
+      });
+
+      if (searchRes.status === 401) {
+        throw new Error('Access Token kedaluwarsa atau tidak valid. Silakan perbarui token Anda di menu Pengaturan.');
+      }
+
+      if (!searchRes.ok) {
+        const errText = await searchRes.text();
+        throw new Error(`Gagal mencari subfolder: ${errText}`);
+      }
+
+      const searchJson = await searchRes.json();
+      let subfolderId = '';
+
+      if (searchJson.files && searchJson.files.length > 0) {
+        subfolderId = searchJson.files[0].id;
+      } else {
+        // 2. Create subfolder YYYY-MM-DD
+        const createRes = await fetch('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            name: todayStr,
+            mimeType: 'application/vnd.google-apps.folder',
+            parents: [folderId]
+          })
+        });
+
+        if (!createRes.ok) {
+          const errText = await createRes.text();
+          throw new Error(`Gagal membuat subfolder baru: ${errText}`);
+        }
+
+        const createJson = await createRes.json();
+        subfolderId = createJson.id;
+      }
+
+      // 3. Multipart upload image file to the resolved subfolder ID
+      const boundary = 'bgi_content_studio_boundary';
+      const metadata = {
+        name: fileName,
+        mimeType: mimeType,
+        parents: [subfolderId]
+      };
+
+      const binaryStr = atob(base64Data);
+      const len = binaryStr.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: mimeType });
+
+      const multipartBody = new Blob([
+        `--${boundary}\r\n`,
+        `Content-Type: application/json; charset=UTF-8\r\n\r\n`,
+        JSON.stringify(metadata),
+        `\r\n--${boundary}\r\n`,
+        `Content-Type: ${mimeType}\r\n\r\n`,
+        blob,
+        `\r\n--${boundary}--`
+      ], { type: `multipart/related; boundary=${boundary}` });
+
+      const uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true';
+      const uploadRes = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`
+        },
+        body: multipartBody
+      });
+
+      if (!uploadRes.ok) {
+        const errText = await uploadRes.text();
+        throw new Error(`Gagal mengunggah file ke Google Drive: ${errText}`);
+      }
+
+      const uploadJson = await uploadRes.json();
+      return {
+        success: true,
+        fileId: uploadJson.id,
+        url: `https://drive.google.com/open?id=${uploadJson.id}`
+      };
+    }
+  };
+
+  const handleSaveImageToDrive = async (promptId, slideNumber) => {
+    const folderUrl = localStorage.getItem('bgi_gdrive_folder_url') || '';
+    if (!folderUrl) {
+      setError('Google Drive belum dikonfigurasi. Silakan atur URL Folder Google Drive di menu Pengaturan terlebih dahulu.');
+      return;
+    }
+
+    setSavingStates(prev => ({ ...prev, [promptId]: true }));
+    setError('');
+    setStatus(`Menyimpan Slide ${slideNumber} ke Google Drive...`);
+
+    try {
+      const rawDataStr = localStorage.getItem('bgi_image_raw_data');
+      if (!rawDataStr) throw new Error('Data gambar tidak ditemukan di penyimpanan lokal.');
+      const rawData = JSON.parse(rawDataStr);
+      const entry = rawData[promptId];
+      if (!entry) throw new Error('Data gambar untuk slide ini tidak ditemukan.');
+
+      let base64Data = '';
+      let mimeType = 'image/png';
+
+      if (entry.type === 'b64') {
+        base64Data = entry.data;
+      } else if (entry.type === 'url') {
+        const res = await fetch(entry.data);
+        const blob = await res.blob();
+        mimeType = blob.type || 'image/png';
+        base64Data = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result.split(',')[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      } else {
+        throw new Error('Format data gambar tidak didukung.');
+      }
+
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+      const fileName = `slide-${slideNumber}_${timestamp}.png`;
+
+      const uploadRes = await uploadImageToGDrive(base64Data, fileName, mimeType);
+
+      if (uploadRes.success) {
+        setStatus(`✅ Slide ${slideNumber} berhasil disimpan ke Google Drive!`);
+      } else {
+        throw new Error(uploadRes.error || 'Gagal menulis file.');
+      }
+    } catch (err) {
+      console.error(err);
+      setError(`Gagal menyimpan ke Google Drive: ${err.message}`);
+    } finally {
+      setSavingStates(prev => ({ ...prev, [promptId]: false }));
+      setTimeout(() => setStatus(''), 5000);
+    }
+  };
+
+  const handleSaveAllImagesToDrive = async () => {
+    const generatedSlides = prompts.filter(p => generatedImages[p.id]?.url);
+    if (generatedSlides.length === 0) {
+      setError('Tidak ada gambar yang berhasil digenerate untuk disimpan.');
+      return;
+    }
+
+    const folderUrl = localStorage.getItem('bgi_gdrive_folder_url') || '';
+    if (!folderUrl) {
+      setError('Google Drive belum dikonfigurasi. Silakan masuk ke menu Pengaturan terlebih dahulu.');
+      return;
+    }
+
+    setIsSavingAll(true);
+    setError('');
+    let successCount = 0;
+    let failedCount = 0;
+
+    const rawDataStr = localStorage.getItem('bgi_image_raw_data');
+    if (!rawDataStr) {
+      setError('Data gambar tidak ditemukan di penyimpanan lokal.');
+      setIsSavingAll(false);
+      return;
+    }
+    const rawData = JSON.parse(rawDataStr);
+
+    for (let i = 0; i < generatedSlides.length; i++) {
+      const item = generatedSlides[i];
+      const slideNum = item.slide || (i + 1);
+      setStatus(`Menyimpan gambar ${i + 1} dari ${generatedSlides.length} ke Google Drive...`);
+
+      try {
+        const entry = rawData[item.id];
+        if (!entry) throw new Error('Data gambar tidak ditemukan.');
+
+        let base64Data = '';
+        let mimeType = 'image/png';
+        if (entry.type === 'b64') {
+          base64Data = entry.data;
+        } else if (entry.type === 'url') {
+          const res = await fetch(item.text); // or entry.data
+          const blob = await res.blob();
+          mimeType = blob.type || 'image/png';
+          base64Data = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+        } else {
+          throw new Error('Format data gambar tidak didukung.');
+        }
+
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+        const fileName = `slide-${slideNum}_${timestamp}.png`;
+
+        const uploadRes = await uploadImageToGDrive(base64Data, fileName, mimeType);
+
+        if (uploadRes.success) {
+          successCount++;
+        } else {
+          failedCount++;
+        }
+      } catch (err) {
+        console.error(`Gagal menyimpan slide ${slideNum}:`, err);
+        failedCount++;
+      }
+    }
+
+    setIsSavingAll(false);
+    if (failedCount === 0) {
+      setStatus(`✅ Berhasil menyimpan semua (${successCount}) gambar ke Google Drive!`);
+    } else {
+      setError(`Selesai dengan error: ${successCount} berhasil, ${failedCount} gagal disimpan.`);
+    }
+    setTimeout(() => setStatus(''), 5000);
+  };
+
   // Clear all
   const handleClearAll = () => {
     // Revoke all blob URLs
@@ -935,6 +1269,25 @@ export default function ImageGenerator() {
             <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic', lineHeight: '1.4' }}>
               💡 Setelah prompt siap, klik tombol <strong>OpenRouter</strong> di setiap kartu prompt pada panel kanan untuk langsung generate gambar.
             </div>
+
+            <div style={{ borderTop: '1px solid rgba(20, 184, 166, 0.15)', paddingTop: '0.75rem', marginTop: '0.75rem' }}>
+              <label className="form-label" style={{ fontSize: '0.7rem', color: '#2dd4bf', marginBottom: '0.4rem', display: 'block' }}>
+                📁 Sinkronisasi Google Drive ({gdriveMode === 'apps-script' ? 'Apps Script' : 'GDrive API'})
+              </label>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  className="input-text"
+                  readOnly
+                  value={gdriveFolderUrl ? `Folder ID: ${extractGDriveFolderId(gdriveFolderUrl)}` : 'Belum dikonfigurasi'}
+                  placeholder="Atur folder di tab Pengaturan"
+                  style={{ fontSize: '0.75rem', height: '30px', flex: 1, padding: '0 0.5rem', background: 'rgba(0, 0, 0, 0.2)', borderColor: 'rgba(20, 184, 166, 0.2)', color: gdriveFolderUrl ? 'var(--text-main)' : 'var(--text-muted)' }}
+                />
+              </div>
+              <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.25rem', display: 'block' }}>
+                Konfigurasi Google Drive dapat diubah pada menu <strong>Pengaturan</strong>.
+              </span>
+            </div>
           </div>
 
           {/* Manual Input Section */}
@@ -996,18 +1349,34 @@ export default function ImageGenerator() {
           <h2 className="card-title" style={{ justifyContent: 'space-between' }}>
             <span>Daftar Prompt ({prompts.length})</span>
             {prompts.length > 0 && (
-              <button
-                onClick={() => {
-                  const allPrompts = prompts.map(p => `[Slide ${p.slide}] ${p.text}`).join('\n\n');
-                  navigator.clipboard.writeText(allPrompts);
-                  setStatus('Semua prompt disalin!');
-                  setTimeout(() => setStatus(''), 2000);
-                }}
-                className="btn btn-outline"
-                style={{ padding: '0.35rem 0.65rem', fontSize: '0.75rem' }}
-              >
-                <Copy size={12} /> Salin Semua
-              </button>
+              <div style={{ display: 'flex', gap: '0.4rem' }}>
+                {contentFormat.toLowerCase().includes('carousel') && (
+                  <button
+                    onClick={handleSaveAllImagesToDrive}
+                    className="btn btn-outline"
+                    disabled={isSavingAll}
+                    style={{ padding: '0.35rem 0.65rem', fontSize: '0.75rem', borderColor: 'rgba(168, 85, 247, 0.4)', color: '#a78bfa', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                  >
+                    {isSavingAll ? (
+                      <div className="loading-spinner" style={{ borderTopColor: '#a78bfa', width: '10px', height: '10px', margin: 0 }}></div>
+                    ) : (
+                      '💾 Simpan Semua ke GDrive'
+                    )}
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    const allPrompts = prompts.map(p => `[Slide ${p.slide}] ${p.text}`).join('\n\n');
+                    navigator.clipboard.writeText(allPrompts);
+                    setStatus('Semua prompt disalin!');
+                    setTimeout(() => setStatus(''), 2000);
+                  }}
+                  className="btn btn-outline"
+                  style={{ padding: '0.35rem 0.65rem', fontSize: '0.75rem' }}
+                >
+                  <Copy size={12} /> Salin Semua
+                </button>
+              </div>
             )}
           </h2>
 
@@ -1164,18 +1533,32 @@ export default function ImageGenerator() {
                       />
                       <div style={{ padding: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)' }}>
                         <span style={{ fontSize: '0.72rem', color: '#2dd4bf' }}>✅ Generated with {openRouterModel}</span>
-                        <button
-                          onClick={() => {
-                            const link = document.createElement('a');
-                            link.href = generatedImages[item.id].url;
-                            link.download = `slide-${item.slide || idx + 1}.png`;
-                            link.click();
-                          }}
-                          className="btn btn-outline"
-                          style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
-                        >
-                          <Download size={12} /> Download
-                        </button>
+                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                          <button
+                            onClick={() => handleSaveImageToDrive(item.id, item.slide || idx + 1)}
+                            className="btn btn-outline"
+                            disabled={savingStates[item.id]}
+                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', borderColor: 'rgba(168, 85, 247, 0.4)', color: '#a78bfa', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                          >
+                            {savingStates[item.id] ? (
+                              <div className="loading-spinner" style={{ borderTopColor: '#a78bfa', width: '10px', height: '10px', margin: 0 }}></div>
+                            ) : (
+                              '💾 Google Drive'
+                            )}
+                          </button>
+                          <button
+                            onClick={() => {
+                              const link = document.createElement('a');
+                              link.href = generatedImages[item.id].url;
+                              link.download = `slide-${item.slide || idx + 1}.png`;
+                              link.click();
+                            }}
+                            className="btn btn-outline"
+                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+                          >
+                            <Download size={12} /> Download
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}

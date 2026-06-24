@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // File operations
   showSaveDialog: (options) => ipcRenderer.invoke('show-save-dialog', options),
   showOpenDialog: (options) => ipcRenderer.invoke('show-open-dialog', options),
+  saveImageToDrive: (data) => ipcRenderer.invoke('save-image-to-drive', data),
   
   // Notifications
   showNotification: (title, body) => ipcRenderer.send('show-notification', { title, body }),

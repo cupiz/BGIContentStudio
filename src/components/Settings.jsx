@@ -12,12 +12,26 @@ export default function Settings() {
   const [loading, setLoading] = useState(false);
   const [testResult, setTestResult] = useState(null); // { success: boolean, msg: string }
   const [saveSuccess, setSaveSuccess] = useState(false);
+  
+  // Google Drive Settings states
+  const [gdriveMode, setGdriveMode] = useState('apps-script');
+  const [gdriveFolderUrl, setGdriveFolderUrl] = useState('');
+  const [gdriveAppsScriptUrl, setGdriveAppsScriptUrl] = useState('');
+  const [gdriveAccessToken, setGdriveAccessToken] = useState('');
+  const [saveGDriveSuccess, setSaveGDriveSuccess] = useState(false);
 
   useEffect(() => {
+    if (!localStorage.getItem('bgi_gdrive_folder_url')) {
+      localStorage.setItem('bgi_gdrive_folder_url', 'https://drive.google.com/drive/folders/1wrxFmI6qarsiBPvuqzuzzU433srw8WUT?usp=sharing');
+    }
     setApiKey(localStorage.getItem('bgi_gemini_api_key') || '');
     setCreatorName(localStorage.getItem('bgi_creator_name') || 'Creator');
     setModel(localStorage.getItem('bgi_gemini_model') || 'gemma-4-31b-it');
     setOpenRouterApiKey(localStorage.getItem('bgi_openrouter_api_key') || '');
+    setGdriveMode(localStorage.getItem('bgi_gdrive_mode') || 'apps-script');
+    setGdriveFolderUrl(localStorage.getItem('bgi_gdrive_folder_url') || '');
+    setGdriveAppsScriptUrl(localStorage.getItem('bgi_gdrive_apps_script_url') || '');
+    setGdriveAccessToken(localStorage.getItem('bgi_gdrive_access_token') || '');
   }, []);
 
   const handleSave = (e) => {
@@ -30,6 +44,18 @@ export default function Settings() {
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 3000);
     // Reload sidebar creator badge if name changed by raising simple custom event or reload page
+    window.dispatchEvent(new Event('storage'));
+  };
+
+  const handleSaveGDriveSettings = (e) => {
+    e.preventDefault();
+    localStorage.setItem('bgi_gdrive_mode', gdriveMode);
+    localStorage.setItem('bgi_gdrive_folder_url', gdriveFolderUrl.trim());
+    localStorage.setItem('bgi_gdrive_apps_script_url', gdriveAppsScriptUrl.trim());
+    localStorage.setItem('bgi_gdrive_access_token', gdriveAccessToken.trim());
+    
+    setSaveGDriveSuccess(true);
+    setTimeout(() => setSaveGDriveSuccess(false), 3000);
     window.dispatchEvent(new Event('storage'));
   };
 
@@ -195,6 +221,118 @@ export default function Settings() {
               Hapus Semua Data
             </button>
           </div>
+        </div>
+
+        <div className="glass-card" style={{ marginTop: '1.5rem', gridColumn: 'span 2' }}>
+          <h2 className="card-title"><Image size={18} style={{ marginRight: '0.25rem' }} /> Sinkronisasi Google Drive</h2>
+          <form onSubmit={handleSaveGDriveSettings}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginBottom: '1.25rem' }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Metode Sinkronisasi</label>
+                <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem', width: '100%' }}>
+                  <button
+                    type="button"
+                    onClick={() => setGdriveMode('apps-script')}
+                    style={{
+                      flex: 1,
+                      padding: '0.75rem 1rem',
+                      borderRadius: '8px',
+                      border: '1px solid',
+                      borderColor: gdriveMode === 'apps-script' ? 'var(--primary)' : 'rgba(255, 255, 255, 0.1)',
+                      background: gdriveMode === 'apps-script' ? 'rgba(20, 184, 166, 0.15)' : 'rgba(255, 255, 255, 0.02)',
+                      color: gdriveMode === 'apps-script' ? 'var(--primary)' : 'var(--text-main)',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.15rem'
+                    }}
+                  >
+                    <span style={{ fontWeight: '600', fontSize: '0.85rem' }}>Google Apps Script Web App</span>
+                    <span style={{ fontSize: '0.72rem', color: gdriveMode === 'apps-script' ? 'var(--primary)' : 'var(--text-muted)' }}>
+                      Rekomendasi - Menggunakan skrip perantara tanpa repot memperbarui token tiap jam.
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setGdriveMode('drive-api')}
+                    style={{
+                      flex: 1,
+                      padding: '0.75rem 1rem',
+                      borderRadius: '8px',
+                      border: '1px solid',
+                      borderColor: gdriveMode === 'drive-api' ? 'var(--primary)' : 'rgba(255, 255, 255, 0.1)',
+                      background: gdriveMode === 'drive-api' ? 'rgba(20, 184, 166, 0.15)' : 'rgba(255, 255, 255, 0.02)',
+                      color: gdriveMode === 'drive-api' ? 'var(--primary)' : 'var(--text-main)',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.15rem'
+                    }}
+                  >
+                    <span style={{ fontWeight: '600', fontSize: '0.85rem' }}>Direct Google Drive API</span>
+                    <span style={{ fontSize: '0.72rem', color: gdriveMode === 'drive-api' ? 'var(--primary)' : 'var(--text-muted)' }}>
+                      Menggunakan OAuth Access Token langsung dengan API Google Drive resmi.
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">URL Folder Share Google Drive</label>
+                <input 
+                  type="text" 
+                  className="input-text" 
+                  value={gdriveFolderUrl}
+                  onChange={(e) => setGdriveFolderUrl(e.target.value)}
+                  placeholder="https://drive.google.com/drive/folders/..."
+                  style={{ height: '38px' }}
+                />
+              </div>
+            </div>
+
+            {gdriveMode === 'apps-script' ? (
+              <div className="form-group">
+                <label className="form-label">URL Web App Google Apps Script</label>
+                <input 
+                  type="text" 
+                  className="input-text" 
+                  value={gdriveAppsScriptUrl}
+                  onChange={(e) => setGdriveAppsScriptUrl(e.target.value)}
+                  placeholder="https://script.google.com/macros/s/.../exec"
+                  style={{ height: '38px' }}
+                />
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.4rem', display: 'block', lineHeight: '1.4' }}>
+                  Deploy Apps Script Anda sebagai <strong>Web App</strong> dengan akses <strong>"Anyone"</strong> dan salin URL-nya ke sini.
+                </span>
+              </div>
+            ) : (
+              <div className="form-group">
+                <label className="form-label">Google Drive Access Token</label>
+                <input 
+                  type="password" 
+                  className="input-text" 
+                  value={gdriveAccessToken}
+                  onChange={(e) => setGdriveAccessToken(e.target.value)}
+                  placeholder="ya29.a0AcV..."
+                  style={{ height: '38px' }}
+                />
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.4rem', display: 'block', lineHeight: '1.4' }}>
+                  Masukkan Access Token OAuth2 aktif. Token ini memiliki masa kedaluwarsa 1 jam setelah dibuat.
+                </span>
+              </div>
+            )}
+
+            <div style={{ marginTop: '1.5rem' }}>
+              <button type="submit" className="btn btn-primary" style={{ padding: '0.5rem 1.25rem' }}>
+                {saveGDriveSuccess ? <><Check size={16} /> Disimpan</> : 'Simpan Pengaturan GDrive'}
+              </button>
+            </div>
+          </form>
         </div>
       </div>
     </div>

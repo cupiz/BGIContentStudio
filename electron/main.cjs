@@ -418,6 +418,26 @@ ipcMain.handle('show-open-dialog', async (_, options) => {
   return await dialog.showOpenDialog(mainWindow, options);
 });
 
+ipcMain.handle('save-image-to-drive', async (_, { base64Data, fileName, baseDirectory }) => {
+  try {
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const targetDir = path.join(baseDirectory, today);
+    
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+    
+    const targetPath = path.join(targetDir, fileName);
+    const buffer = Buffer.from(base64Data, 'base64');
+    fs.writeFileSync(targetPath, buffer);
+    
+    return { success: true, path: targetPath };
+  } catch (error) {
+    console.error('Error saving image to drive:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.on('show-notification', (_, { title, body }) => {
   if (Notification.isSupported()) {
     new Notification({ title, body }).show();
