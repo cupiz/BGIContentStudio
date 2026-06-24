@@ -23,7 +23,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showNotification: (title, body) => ipcRenderer.send('show-notification', { title, body }),
   
   // Check if running in Electron
-  isElectron: true
+  isElectron: true,
+  
+  // Update API
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('download-update'),
+  onUpdateStatus: (callback) => ipcRenderer.on('update-status', (_, data) => callback(data))
 });
 
 

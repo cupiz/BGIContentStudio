@@ -10,6 +10,7 @@ const path = require('path');
 const { spawn, execFile } = require('child_process');
 const http = require('http');
 const fs = require('fs');
+const updater = require('./updater.cjs');
 
 // Disable GPU acceleration untuk stabilitas
 app.disableHardwareAcceleration();
@@ -334,6 +335,12 @@ function createWindow() {
     closeSplash();
     mainWindow.show();
     console.log('[Main] Window ready');
+    
+    // Set updater window reference and check for updates
+    updater.setMainWindow(mainWindow);
+    if (!isDev) {
+      setTimeout(() => updater.checkForUpdates(), 5000);
+    }
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -378,6 +385,11 @@ ipcMain.on('show-notification', (_, { title, body }) => {
     new Notification({ title, body }).show();
   }
 });
+
+// ===== Update Handlers =====
+ipcMain.handle('check-for-updates', () => updater.checkForUpdates());
+ipcMain.handle('download-update', () => updater.downloadAndInstall());
+ipcMain.handle('get-app-version', () => updater.getCurrentVersion());
 
 // ===== App Lifecycle =====
 app.whenReady().then(async () => {
