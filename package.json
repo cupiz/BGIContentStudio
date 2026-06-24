@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite",
     "dev:server": "node server/scraper.mjs",
-    "dev:all": "npm-run-all --parallel dev dev:server",
+    "dev:vps": "node server/vps_server.mjs",
+    "dev:all": "npm-run-all --parallel dev dev:server dev:vps",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -17,9 +18,14 @@
   },
   "dependencies": {
     "adm-zip": "^0.5.17",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
     "lucide-react": "^1.18.0",
+    "node-fetch": "^3.3.2",
+    "pg": "^8.22.0",
     "playwright": "^1.60.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"

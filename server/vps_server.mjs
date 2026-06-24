@@ -33,7 +33,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Database Connection
 const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/bgidb',
 });
 
 // Auto-Initialize Database Tables

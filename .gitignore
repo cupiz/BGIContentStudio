@@ -42,3 +42,6 @@ release/
 # Windows reserved filenames
 nul
 NUL
+
+# Environment variables
+.env
