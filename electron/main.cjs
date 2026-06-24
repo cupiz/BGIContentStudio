@@ -15,6 +15,21 @@ const updater = require('./updater.cjs');
 // Disable GPU acceleration untuk stabilitas
 app.disableHardwareAcceleration();
 
+// ===== Single Instance Lock =====
+// Prevent multiple windows from opening when user double-clicks .exe repeatedly
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    // If a second instance is launched, focus the existing window instead
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
 let mainWindow;
 let splashWindow;
 let serverProcess;
