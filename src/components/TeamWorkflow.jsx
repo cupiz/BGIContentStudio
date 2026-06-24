@@ -189,9 +189,7 @@ export default function TeamWorkflow() {
       }
 
       let currentFiles = resJson.files || [];
-      if (role === 'cs') {
-        currentFiles = await syncGDriveFilesToVPS(currentFiles, activeToken, url);
-      }
+      currentFiles = await syncGDriveFilesToVPS(currentFiles, activeToken, url);
 
       setFiles(currentFiles);
     } catch (err) {
