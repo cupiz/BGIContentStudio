@@ -7,17 +7,40 @@ dotenv.config();
 // Gunakan DATABASE_URL dari .env, atau default ke localhost jika tidak ada
 const DATABASE_URL = process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/bgidb';
 
-const pool = new pg.Pool({
-  connectionString: DATABASE_URL,
-});
-
 async function seed() {
-  // Samarkan password dalam URL log untuk keamanan
   const safeUrl = DATABASE_URL.replace(/:([^:@]+)@/, ':****@');
-  console.log('[Seeder] Menghubungkan ke database:', safeUrl);
+  console.log('[Seeder] Menghubungkan ke PostgreSQL:', safeUrl);
   
+  // 1. Koneksi awal ke database default 'postgres' untuk memastikan 'bgidb' ada
+  const adminDbUrl = DATABASE_URL.replace(/\/([^/?]+)(\?|$)/, '/postgres$2');
+  const tempPool = new pg.Pool({
+    connectionString: adminDbUrl,
+  });
+
   try {
-    // 1. Buat Tabel Users jika belum ada
+    console.log('[Seeder] Memeriksa apakah database "bgidb" sudah ada...');
+    const dbCheck = await tempPool.query("SELECT 1 FROM pg_database WHERE datname = 'bgidb'");
+    
+    if (dbCheck.rowCount === 0) {
+      console.log('[Seeder] Database "bgidb" tidak ditemukan. Membuat database baru...');
+      await tempPool.query("CREATE DATABASE bgidb");
+      console.log('✅ Database "bgidb" berhasil dibuat!');
+    } else {
+      console.log('[Seeder] Database "bgidb" sudah ada.');
+    }
+  } catch (err) {
+    console.warn('[Seeder] Info/Peringatan saat memeriksa/membuat database:', err.message);
+  } finally {
+    await tempPool.end();
+  }
+
+  // 2. Hubungkan ke database 'bgidb' yang sebenarnya
+  const pool = new pg.Pool({
+    connectionString: DATABASE_URL,
+  });
+
+  try {
+    // Buat Tabel Users jika belum ada
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -29,7 +52,7 @@ async function seed() {
       );
     `);
 
-    // 2. Daftar user testing yang akan dimasukkan
+    // Daftar user testing yang akan dimasukkan
     const testUsers = [
       { username: 'admin', password: 'admin123', fullName: 'Super Admin', role: 'admin' },
       { username: 'cs', password: 'cs123', fullName: 'Budi CS', role: 'cs' },

@@ -1,6 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { Users, Key, Check, AlertCircle, ExternalLink, Download, RefreshCw, X, ShieldAlert, LogOut, CheckCircle2 } from 'lucide-react';
 
+function extractGDriveFolderId(url) {
+  if (!url) return '';
+  url = url.trim();
+  const foldersMatch = url.match(/\/folders\/([a-zA-Z0-9-_]+)/);
+  if (foldersMatch && foldersMatch[1]) {
+    return foldersMatch[1];
+  }
+  const idMatch = url.match(/[?&]id=([a-zA-Z0-9-_]+)/);
+  if (idMatch && idMatch[1]) {
+    return idMatch[1];
+  }
+  if (/^[a-zA-Z0-9-_]+$/.test(url)) {
+    return url;
+  }
+  return '';
+}
+
 export default function TeamWorkflow() {
   // Authentication states
   const [token, setToken] = useState(localStorage.getItem('bgi_team_token') || '');
@@ -28,6 +45,117 @@ export default function TeamWorkflow() {
   // Action states for Project Leader
   const [actionStates, setActionStates] = useState({}); // { [fileId]: { loading: boolean } }
 
+  // Sync GDrive files not yet in VPS database
+  const syncGDriveFilesToVPS = async (dbFiles, activeToken = token, url = vpsUrl) => {
+    const folderUrl = localStorage.getItem('bgi_gdrive_folder_url') || '';
+    if (!folderUrl) return dbFiles;
+
+    const folderId = extractGDriveFolderId(folderUrl);
+    if (!folderId) return dbFiles;
+
+    const mode = localStorage.getItem('bgi_gdrive_mode') || 'apps-script';
+    let gdriveFiles = [];
+
+    try {
+      if (mode === 'apps-script') {
+        const appsScriptUrl = localStorage.getItem('bgi_gdrive_apps_script_url') || '';
+        if (!appsScriptUrl) return dbFiles;
+
+        const gdriveUrl = `${appsScriptUrl}?folderId=${folderId}`;
+        const response = await fetch(gdriveUrl, { method: 'GET' });
+        if (!response.ok) return dbFiles;
+        const resJson = await response.json();
+        if (resJson.success) {
+          gdriveFiles = resJson.files || [];
+        }
+      } else {
+        // Direct GDrive API
+        const accessToken = localStorage.getItem('bgi_gdrive_access_token') || '';
+        if (!accessToken) return dbFiles;
+
+        const subfoldersUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(`'${folderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`)}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+        const subfoldersRes = await fetch(subfoldersUrl, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (!subfoldersRes.ok) return dbFiles;
+        const subfoldersJson = await subfoldersRes.json();
+
+        const parentIds = [folderId];
+        if (subfoldersJson.files) {
+          subfoldersJson.files.forEach(f => parentIds.push(f.id));
+        }
+
+        const parentOrQuery = parentIds.map(id => `'${id}' in parents`).join(' or ');
+        const filesQuery = `mimeType contains 'image/' and (${parentOrQuery}) and trashed = false`;
+        const filesUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(filesQuery)}&fields=files(id,name,webViewLink,createdTime,parents)&orderBy=createdTime%20desc&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+        
+        const filesRes = await fetch(filesUrl, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (!filesRes.ok) return dbFiles;
+        const filesJson = await filesRes.json();
+        gdriveFiles = (filesJson.files || []).map(f => ({
+          id: f.id,
+          name: f.name,
+          url: f.webViewLink
+        }));
+      }
+
+      // Filter files
+      const dbFileIds = new Set(dbFiles.map(f => f.gdrive_file_id));
+      const filesToRegister = gdriveFiles.filter(file => {
+        const nameWithoutExt = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
+        if (nameWithoutExt.endsWith('_UPLOADED') || nameWithoutExt.endsWith('_DONE')) {
+          return false;
+        }
+        return !dbFileIds.has(file.id);
+      });
+
+      if (filesToRegister.length === 0) {
+        return dbFiles;
+      }
+
+      console.log(`[Sync] Mendaftarkan ${filesToRegister.length} file GDrive baru yang belum terdata di VPS...`);
+      let registeredCount = 0;
+      for (const file of filesToRegister) {
+        try {
+          const regRes = await fetch(`${url}/api/content/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              gdrive_file_id: file.id,
+              file_name: file.name,
+              gdrive_url: file.url || `https://drive.google.com/open?id=${file.id}`
+            })
+          });
+          if (regRes.ok) {
+            registeredCount++;
+          }
+        } catch (regErr) {
+          console.error('[Sync] Gagal meregistrasi file:', file.name, regErr.message);
+        }
+      }
+
+      if (registeredCount > 0) {
+        // Fetch ulang antrean terbaru dari VPS database
+        const endpoint = '/api/content/pending';
+        const response = await fetch(`${url}${endpoint}`, {
+          headers: { 'Authorization': `Bearer ${activeToken}` }
+        });
+        if (response.ok) {
+          const resJson = await response.json();
+          if (resJson.success) {
+            return resJson.files || [];
+          }
+        }
+      }
+    } catch (syncErr) {
+      console.error('[Sync GDrive to VPS] Terjadi kesalahan:', syncErr.message);
+    }
+
+    return dbFiles;
+  };
+
   // Load files based on role
   const loadFiles = async (activeToken = token, role = userRole, url = vpsUrl) => {
     if (!activeToken || !role) return;
@@ -51,7 +179,12 @@ export default function TeamWorkflow() {
         throw new Error(resJson.error || 'Terjadi kesalahan pada VPS.');
       }
 
-      setFiles(resJson.files || []);
+      let currentFiles = resJson.files || [];
+      if (role === 'cs') {
+        currentFiles = await syncGDriveFilesToVPS(currentFiles, activeToken, url);
+      }
+
+      setFiles(currentFiles);
     } catch (err) {
       console.error(err);
       setError(`Gagal memuat antrean file: ${err.message}. Pastikan alamat VPS Anda benar.`);
