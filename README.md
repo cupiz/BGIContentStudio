@@ -1,16 +1,36 @@
 # BGI Content Studio 🚀
 
-BGI Content Studio adalah aplikasi asisten pembuatan konten media sosial premium berbasis AI yang dirancang untuk memetakan strategi brand, menyusun pilar konten, menghasilkan ide, draf skrip, hook, hingga caption siap pakai secara otomatis.
+BGI Content Studio adalah aplikasi asisten pembuatan konten media sosial premium berbasis AI yang dirancang untuk memetakan strategi brand, menyusun pilar konten, menghasilkan ide, draf skrip, hook, hingga caption siap pakai secara otomatis — tersedia sebagai **aplikasi desktop** dan **web app**.
 
-Aplikasi ini menggunakan teknologi **React (Vite)** untuk antarmuka pengguna, **Express** untuk backend service, **Gemini AI API** untuk kecerdasan analisis konten, dan **Playwright** untuk scraping profil Instagram secara real.
+Aplikasi ini menggunakan teknologi **React (Vite)** untuk antarmuka pengguna, **Electron** untuk distribusi desktop, **Express** untuk backend service, **Gemini AI API** untuk kecerdasan analisis konten, **OpenRouter** untuk generasi gambar AI, dan **Playwright** untuk scraping profil Instagram secara real.
 
 ---
 
 ## ✨ Fitur Utama
-1. **Strategic Niche & Brand Profiling**: Mengidentifikasi positioning, target audiens, segmentasi, tone of voice, dan brand archetype.
-2. **Real Instagram Scraper (Deteksi Niche)**: Menganalisis akun kompetitor atau role model secara dinamis untuk mendeteksi niche utama mereka secara akurat.
-3. **Autopilot AI (One-Click)**: Menghubungkan seluruh tahapan dari niche, pilar, ide konten, skrip video, variasi hook emosional, hingga caption media sosial dalam sekali klik.
-4. **Pilar Konten Dinamis**: Visualisasi pilar konten yang dapat ditambah, disunting, dan dihapus secara fleksibel.
+
+### 🎯 Content Strategy
+- **Strategic Niche & Brand Profiling**: Mengidentifikasi positioning, target audiens, segmentasi, tone of voice, dan brand archetype.
+- **Real Instagram Scraper (Deteksi Niche)**: Menganalisis akun kompetitor atau role model secara dinamis untuk mendeteksi niche utama mereka secara akurat.
+- **Autopilot AI (One-Click)**: Menghubungkan seluruh tahapan dari niche, pilar, ide konten, skrip video, variasi hook emosional, hingga caption media sosial dalam sekali klik.
+- **Pilar Konten Dinamis**: Visualisasi pilar konten yang dapat ditambah, disunting, dan dihapus secara fleksibel.
+
+### 🖼️ Image Generation (OpenRouter AI)
+- **Image-to-Image Generation**: Upload gambar referensi sebagai panduan gaya visual, lalu generate gambar baru dengan AI.
+- **Text-to-Image Generation**: Generate gambar dari prompt teks menggunakan model AI seperti **RiverFlow v2.5** dan **Grok Imagine**.
+- **Gemini Visual Analysis**: Analisis gambar referensi menggunakan Gemini AI untuk mendapatkan rekomendasi prompt otomatis.
+- **Multi-Model Support**: Pilih model AI yang berbeda untuk hasil yang berbeda (RiverFlow untuk kualitas cepat, Grok untuk variasi artistik).
+- **Download Generated Images**: Download hasil gambar yang sudah di-generate langsung dari aplikasi.
+
+### 📱 Desktop App (Electron)
+- **Auto-Update**: Aplikasi otomatis mendeteksi update dari GitHub Releases dan mengunduhnya tanpa perlu download manual.
+- **Splash Screen**: Tampilan loading interaktif saat aplikasi memulai (install Chromium, start server, load UI).
+- **Playwright Auto-Install**: Chromium browser otomatis di-install saat pertama kali membuka aplikasi.
+- **System Tray**: Aplikasi berjalan di system tray untuk akses cepat.
+
+### 🔄 CI/CD Automation (GitHub Actions)
+- **Auto-Build**: Setiap push ke branch `main` otomatis build aplikasi Windows.
+- **Auto-Release**: Build otomatis di-zip dan di-upload ke GitHub Releases.
+- **Version Auto-Increment**: Nomor versi otomatis naik setiap release baru.
 
 ---
 
@@ -30,12 +50,22 @@ Scraper Instagram yang terletak di `server/scraper.mjs` menggunakan strategi khu
 
 ---
 
-## 🛠️ Panduan Menjalankan Aplikasi
+## 🛠️ Panduan Instalasi & Menjalankan
 
-Pastikan Anda telah menginstal seluruh dependensi dengan menjalankan `npm install`.
+### Prasyarat
+- **Node.js** v18+ (hanya untuk development)
+- **npm** (atau yarn/pnpm/bun)
+- **Google Chrome** atau **Chromium** (untuk Playwright scraper)
+
+### Instalasi Dependencies
+```bash
+git clone https://github.com/cupiz/BGIContentStudio.git
+cd BGIContentStudio
+npm install
+```
 
 ### 1. Jalankan Seluruh Aplikasi Secara Paralel (Sangat Direkomendasikan)
-Untuk menjalankan frontend Vite dan backend scraper server secara bersamaan dalam satu terminal, jalankan:
+Untuk menjalankan frontend Vite dan backend scraper server secara bersamaan dalam satu terminal:
 ```bash
 npm run dev:all
 ```
@@ -53,11 +83,89 @@ Jika ingin memisahkan proses atau melihat logs scraper secara real-time:
     npm run dev:server
     ```
 
+### 3. Jalankan sebagai Desktop App (Electron)
+```bash
+npm run electron:dev
+```
+
+### 4. Build Desktop App
+```bash
+npm run electron:build
+```
+Output akan tersedia di folder `release/`.
+
 ---
 
-## 📂 Struktur Folder Penting
-*   `server/scraper.mjs`: Server Express yang menjalankan Playwright headless untuk scraping Instagram via mobile emulation.
-*   `src/services/gemini.js`: Integrasi API Gemini. Mengatur alur deteksi niche dengan 3 strategi (real backend API -> paste HTML manual -> AI simulation fallback).
-*   `src/components/PillarMapping.jsx`: Antarmuka pengelolaan pilar konten, autopilot generator, dan panel scraper Instagram.
-*   `vite.config.js`: Dilengkapi dengan konfigurasi proxy `/api` ke port `http://localhost:3001` untuk menghindari masalah CORS di sisi klien.
+## 📦 Distribusi Desktop (Electron)
 
+BGI Content Studio tersedia sebagai aplikasi desktop Windows dengan fitur:
+
+### Auto-Update
+Aplikasi otomatis memeriksa GitHub Releases saat startup. Jika ada versi baru:
+1. Notifikasi muncul di aplikasi
+2. User klik "Download Update"
+3. Aplikasi mengunduh ZIP dari GitHub Releases
+4. Backup versi lama → Extract versi baru → Restart
+
+**Rollback otomatis** jika update gagal (file corrupt, download error, dll).
+
+### CI/CD Pipeline
+```
+Push ke main → GitHub Actions build → Auto-Release → User download dari GitHub Releases
+```
+
+| Component | Tech |
+|-----------|------|
+| **Build** | `electron-packager` (Windows x64) |
+| **CI/CD** | GitHub Actions |
+| **Release** | Auto-create GitHub Release + ZIP |
+| **Update** | Custom updater (GitHub Releases API + adm-zip) |
+
+---
+
+## 🖼️ API Keys yang Dibutuhkan
+
+| Service | Untuk | Mendapatkan Key |
+|---------|-------|-----------------|
+| **Google Gemini AI** | Analisis konten, hook generation, script, caption, niche detection | [Google AI Studio](https://aistudio.google.com/app/apikey) |
+| **OpenRouter** | Generasi gambar AI (RiverFlow, Grok Imagine) | [OpenRouter](https://openrouter.ai/keys) |
+
+Set API Key di menu **Pengaturan (Settings)** dalam aplikasi.
+
+---
+
+## 📂 Struktur Folder
+
+| Path | Deskripsi |
+|------|-----------|
+| `electron/main.cjs` | Electron main process — window management, server startup, auto-install Playwright |
+| `electron/preload.cjs` | Preload script — IPC bridge antara main dan renderer |
+| `electron/updater.cjs` | Custom auto-updater — GitHub Releases API + backup/rollback |
+| `server/scraper.mjs` | Server Express — Playwright headless untuk scraping Instagram via mobile emulation |
+| `src/services/gemini.js` | Integrasi API Gemini — deteksi niche, hook, script, caption, image analysis |
+| `src/services/openrouter.js` | Integrasi OpenRouter API — generasi gambar dengan multiple models |
+| `src/components/PillarMapping.jsx` | Antarmuka pengelolaan pilar konten, autopilot generator, dan panel scraper Instagram |
+| `src/components/ImageGenerator.jsx` | Generator gambar dengan OpenRouter AI + Gemini visual analysis |
+| `src/components/Settings.jsx` | Pengaturan API keys (Gemini & OpenRouter) |
+| `.github/workflows/build.yml` | GitHub Actions CI/CD — auto-build & release |
+| `vite.config.js` | Konfigurasi Vite + proxy `/api` ke port `http://localhost:3001` |
+
+---
+
+## 📋 Script Commands
+
+| Command | Deskripsi |
+|---------|-----------|
+| `npm run dev` | Jalankan frontend Vite saja |
+| `npm run dev:server` | Jalankan backend scraper saja |
+| `npm run dev:all` | Jalankan frontend + backend secara paralel |
+| `npm run build` | Build frontend ke folder `dist/` |
+| `npm run lint` | Jalankan ESLint |
+| `npm run electron:dev` | Jalankan sebagai desktop app (development mode) |
+| `npm run electron:build` | Build desktop app Windows (output di `release/`) |
+
+---
+
+## 📄 License
+
+Copyright © 2024 BGI. All rights reserved.
