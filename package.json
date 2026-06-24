@@ -16,7 +16,11 @@
     "electron:build:prod": "npm run build && electron-builder build --win --publish always"
   },
   "dependencies": {
+    "adm-zip": "^0.5.17",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
     "lucide-react": "^1.18.0",
+    "playwright": "^1.60.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   },
@@ -26,9 +30,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
-    "adm-zip": "^0.5.17",
     "concurrently": "^8.2.2",
-    "cors": "^2.8.6",
     "cross-env": "^7.0.3",
     "electron": "^32.2.0",
     "electron-builder": "^25.1.8",
@@ -37,10 +39,8 @@
     "eslint": "^10.3.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
-    "express": "^5.2.1",
     "globals": "^17.6.0",
     "npm-run-all": "^4.1.5",
-    "playwright": "^1.60.0",
     "png-to-ico": "^3.0.1",
     "semver": "^7.8.5",
     "sharp": "^0.35.2",

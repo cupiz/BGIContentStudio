@@ -174,10 +174,18 @@ function ensurePlaywrightBrowsers(splashWin) {
 
     console.log(`[Main] Running: ${cmd} ${args.join(' ')}`);
 
+    const spawnEnv = {
+      ...process.env,
+      PLAYWRIGHT_BROWSERS_PATH: getPlaywrightBrowserDir()
+    };
+    if (!isDev && cmd === process.execPath) {
+      spawnEnv.ELECTRON_RUN_AS_NODE = '1';
+    }
+
     const installProcess = spawn(cmd, args, {
       cwd: isDev ? path.join(__dirname, '..') : process.resourcesPath,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: getPlaywrightBrowserDir() }
+      env: spawnEnv
     });
 
     // 5-minute timeout to prevent hanging
@@ -283,16 +291,23 @@ function startServer() {
     // In production (packaged app), 'node' is not in PATH.
     // Electron binary IS Node.js — use process.execPath to run the server script.
     const cmd = isDev ? 'node' : process.execPath;
-    const appDir = path.join(__dirname, '..');
+    const appDir = isDev ? path.join(__dirname, '..') : app.getPath('userData');
+    const distPath = path.join(__dirname, '..', 'dist');
+
+    const spawnEnv = {
+      ...process.env,
+      NODE_ENV: isDev ? 'development' : 'production',
+      BGI_SERVER_PORT: String(serverPort),
+      BGI_FRONTEND_DIST: distPath
+    };
+    if (!isDev) {
+      spawnEnv.ELECTRON_RUN_AS_NODE = '1';
+    }
 
     serverProcess = spawn(cmd, [serverPath], {
       cwd: appDir,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        NODE_ENV: isDev ? 'development' : 'production',
-        BGI_SERVER_PORT: String(serverPort)
-      }
+      env: spawnEnv
     });
 
     serverProcess.stdout.on('data', (data) => {

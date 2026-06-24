@@ -17,7 +17,7 @@ const DEFAULT_PORT = parseInt(process.env.BGI_SERVER_PORT || '3001', 10);
 // This allows the Electron window to load from http://localhost:PORT
 // so that relative /api/ fetch calls work correctly (no Vite proxy).
 const isProduction = process.env.NODE_ENV === 'production';
-const distPath = path.join(process.cwd(), 'dist');
+const distPath = process.env.BGI_FRONTEND_DIST || path.join(process.cwd(), 'dist');
 if (isProduction && fs.existsSync(distPath)) {
   console.log(`[Server] Serving frontend from: ${distPath}`);
   app.use(express.static(distPath));
@@ -1421,7 +1421,7 @@ app.get('/api/health', (req, res) => {
 
 // ===== SPA catch-all: serve index.html for non-API routes in production =====
 if (isProduction && fs.existsSync(distPath)) {
-  app.get('*', (req, res) => {
+  app.get('*splat', (req, res) => {
     if (!req.path.startsWith('/api')) {
       res.sendFile(path.join(distPath, 'index.html'));
     } else {
