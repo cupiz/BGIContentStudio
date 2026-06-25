@@ -24,6 +24,9 @@ export default function Settings() {
     if (!localStorage.getItem('bgi_gdrive_folder_url')) {
       localStorage.setItem('bgi_gdrive_folder_url', 'https://drive.google.com/drive/folders/1wrxFmI6qarsiBPvuqzuzzU433srw8WUT?usp=sharing');
     }
+    if (!localStorage.getItem('bgi_gdrive_apps_script_url')) {
+      localStorage.setItem('bgi_gdrive_apps_script_url', 'https://script.google.com/macros/s/AKfycbw57IQwz_EjX_x8NhXPQIepUAkRpKVy26K3XXfFb78hHn3il0e_fYwscKgZycQYtycT/exec');
+    }
     setApiKey(localStorage.getItem('bgi_gemini_api_key') || '');
     setCreatorName(localStorage.getItem('bgi_creator_name') || 'Creator');
     setModel(localStorage.getItem('bgi_gemini_model') || 'gemma-4-31b-it');

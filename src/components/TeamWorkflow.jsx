@@ -53,7 +53,7 @@ export default function TeamWorkflow() {
   const [token, setToken] = useState(localStorage.getItem('bgi_team_token') || '');
   const [userRole, setUserRole] = useState(localStorage.getItem('bgi_team_role') || '');
   const [fullName, setFullName] = useState(localStorage.getItem('bgi_team_fullname') || '');
-  const [vpsUrl, setVpsUrl] = useState(localStorage.getItem('bgi_team_vps_url') || 'http://localhost:5000');
+  const [vpsUrl, setVpsUrl] = useState(localStorage.getItem('bgi_team_vps_url') || 'http://43.156.145.252:5000');
   
   // Login form states
   const [usernameInput, setUsernameInput] = useState('');
