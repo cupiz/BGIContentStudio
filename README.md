@@ -14,23 +14,25 @@ Aplikasi ini menggunakan teknologi **React (Vite)** untuk antarmuka pengguna, **
 - **Autopilot AI (One-Click)**: Menghubungkan seluruh tahapan dari niche, pilar, ide konten, skrip video, variasi hook emosional, hingga caption media sosial dalam sekali klik.
 - **Pilar Konten Dinamis**: Visualisasi pilar konten yang dapat ditambah, disunting, dan dihapus secara fleksibel.
 
-### 🖼️ Image Generation (OpenRouter AI)
-- **Image-to-Image Generation**: Upload gambar referensi sebagai panduan gaya visual, lalu generate gambar baru dengan AI.
-- **Text-to-Image Generation**: Generate gambar dari prompt teks menggunakan model AI seperti **RiverFlow v2.5** dan **Grok Imagine**.
-- **Gemini Visual Analysis**: Analisis gambar referensi menggunakan Gemini AI untuk mendapatkan rekomendasi prompt otomatis.
-- **Multi-Model Support**: Pilih model AI yang berbeda untuk hasil yang berbeda (RiverFlow untuk kualitas cepat, Grok untuk variasi artistik).
-- **Download Generated Images**: Download hasil gambar yang sudah di-generate langsung dari aplikasi.
+### 🖼️ Image Generation & Google Drive Sync
+- **Image Generation (OpenRouter AI)**: Mendukung generasi gambar menggunakan model terbaik seperti **RiverFlow v2.5** dan **Grok Imagine** dengan panduan analisis visual Gemini AI.
+- **Google Drive Sync (Multi-Mode)**:
+  - **Google Apps Script Web App**: Rekomendasi sinkronisasi stabil tanpa repot kedaluwarsa token OAuth (mengunggah data base64 melalui script Web App).
+  - **Direct Google Drive API**: Integrasi resmi menggunakan OAuth2 Access Token untuk mengunggah gambar langsung ke Drive API.
+  - **Subfolder Harian Otomatis**: Membuat folder `YYYY-MM-DD` otomatis di dalam folder target.
+  - **Auto Folder ID Extraction**: Otomatis mengekstrak ID folder dari URL share Google Drive biasa.
+- **Zoom Lightbox & Fallback Panel**: Klik gambar preview untuk melihat detail secara fullscreen, lengkap dengan panel bantuan langsung ke Google Drive apabila akses file bersifat privat/terkendala cookie CORS browser.
+
+### 👥 Team Collaboration Workflow
+- **Real-Time Job Queue**: Menghubungkan Customer Service (CS) yang mengirim laporan postingan dan Administrator / Project Leader yang memvalidasi hasil konten secara real-time.
+- **VPS Server Database Sync**: Tersinkronisasi penuh dengan server VPS produksi di IP `http://43.156.145.252:5000` (atau VPS lokal/kustom Anda).
+- **Advanced Sorting**: Mengurutkan antrean tugas kolaborasi berdasarkan *Terbaru*, *Terlama*, *Nama A-Z*, dan *Nama Z-A*.
 
 ### 📱 Desktop App (Electron)
-- **Auto-Update**: Aplikasi otomatis mendeteksi update dari GitHub Releases dan mengunduhnya tanpa perlu download manual.
-- **Splash Screen**: Tampilan loading interaktif saat aplikasi memulai (install Chromium, start server, load UI).
-- **Playwright Auto-Install**: Chromium browser otomatis di-install saat pertama kali membuka aplikasi.
-- **System Tray**: Aplikasi berjalan di system tray untuk akses cepat.
-
-### 🔄 CI/CD Automation (GitHub Actions)
-- **Auto-Build**: Setiap push ke branch `main` otomatis build aplikasi Windows.
-- **Auto-Release**: Build otomatis di-zip dan di-upload ke GitHub Releases.
-- **Version Auto-Increment**: Nomor versi otomatis naik setiap release baru.
+- **Auto-Update**: Aplikasi otomatis mendeteksi rilis versi baru dari GitHub Releases, mencadangkan file, mengekstrak update, dan merestart aplikasi.
+- **Smart Playwright Installer**: Aplikasi mendeteksi revisi spesifik browser Chromium yang dibutuhkan (`chromium-1228` bawaan Playwright v1.60.0). Jika versi revisi tidak terinstal/tidak cocok di AppData user, aplikasi akan mengunduhnya secara otomatis saat *first launch* agar scraper bebas crash.
+- **Isolated Native Bundling**: Dependensi backend seperti `playwright-core` dan database drivers (`pg-pool`, dll) dikemas secara khusus sehingga Express server backend mandiri langsung berjalan stabil di PC user tanpa memerlukan instalasi Node.js lokal.
+- **Splash Screen & System Tray**: Monitor progres instalasi komponen serta jalankan aplikasi di system tray.
 
 ---
 
@@ -123,14 +125,16 @@ Push ke main → GitHub Actions build → Auto-Release → User download dari Gi
 
 ---
 
-## 🖼️ API Keys yang Dibutuhkan
+## 🖼️ Kredensial & Pengaturan yang Dibutuhkan
 
-| Service | Untuk | Mendapatkan Key |
-|---------|-------|-----------------|
-| **Google Gemini AI** | Analisis konten, hook generation, script, caption, niche detection | [Google AI Studio](https://aistudio.google.com/app/apikey) |
-| **OpenRouter** | Generasi gambar AI (RiverFlow, Grok Imagine) | [OpenRouter](https://openrouter.ai/keys) |
+| Konfigurasi / Service | Untuk | Cara Mendapatkan / Setting |
+|---|---|---|
+| **Google Gemini AI Key** | Analisis konten, autopilot generation, script, caption, deteksi niche, analisis gambar. | Dapatkan di [Google AI Studio](https://aistudio.google.com/app/apikey) lalu simpan di menu **Settings**. |
+| **OpenRouter API Key** | Generasi gambar AI dengan model Grok & RiverFlow. | Dapatkan di [OpenRouter Keys](https://openrouter.ai/keys) lalu simpan di menu **Settings**. |
+| **Google Apps Script URL** | Menghubungkan aplikasi ke script Web App untuk sinkronisasi Google Drive stabil. | Deploy Apps Script sebagai Web App (Akses: "Anyone"), lalu tempelkan URL di menu **Settings** atau file `.env` (`APPS_SCRIPT_URL`). |
+| **Google Drive Access Token** | Alternatif sinkronisasi langsung ke Google Drive API (masa aktif 1 jam). | Dapatkan Access Token OAuth2 aktif, lalu simpan di menu **Settings**. |
 
-Set API Key di menu **Pengaturan (Settings)** dalam aplikasi.
+Pengaturan API Keys dan Google Drive dapat disetel secara interaktif melalui menu **Pengaturan (Settings)** di dalam sidebar aplikasi.
 
 ---
 
