@@ -20,9 +20,46 @@ function extractGDriveFolderId(url) {
   return '';
 }
 
+function extractGDriveFileId(url) {
+  if (!url) return '';
+  url = url.trim();
+  
+  // 1. Cek format URL sharing standar (/file/d/ID/view)
+  const fileMatch = url.match(/\/file\/d\/([a-zA-Z0-9-_]+)/);
+  if (fileMatch && fileMatch[1]) {
+    return fileMatch[1];
+  }
+  
+  // 2. Cek format query param (?id=ID atau &id=ID)
+  const idMatch = url.match(/[?&]id=([a-zA-Z0-9-_]+)/);
+  if (idMatch && idMatch[1]) {
+    return idMatch[1];
+  }
+  
+  // 3. Cek format URL path langsung (/open?id=ID)
+  const openMatch = url.match(/\/open\?id=([a-zA-Z0-9-_]+)/);
+  if (openMatch && openMatch[1]) {
+    return openMatch[1];
+  }
+  
+  // 4. Jika hanya ID mentah biasa
+  if (/^[a-zA-Z0-9-_]{20,60}$/.test(url)) {
+    return url;
+  }
+  
+  return url;
+}
+
 export default function ImageGenerator() {
   const [prompts, setPrompts] = useState([]);
   const [newPrompt, setNewPrompt] = useState('');
+  const [zoomImage, setZoomImage] = useState(null);
+  const [zoomError, setZoomError] = useState(false);
+
+  const openZoom = (url) => {
+    setZoomError(false);
+    setZoomImage(url);
+  };
   const [referenceImage, setReferenceImage] = useState(null);
   const [referenceImagePreview, setReferenceImagePreview] = useState(null);
   const [slideCount, setSlideCount] = useState(5);
@@ -972,7 +1009,7 @@ export default function ImageGenerator() {
           return {
             id: f.id,
             name: f.name,
-            thumbnail: `https://lh3.googleusercontent.com/d/${f.id}=w400`,
+            thumbnail: `https://drive.google.com/thumbnail?id=${extractGDriveFileId(f.id)}&sz=w400`,
             url: f.webViewLink,
             date: folderNames[parentId] || 'Lainnya',
             created: new Date(f.createdTime).getTime()
@@ -1627,10 +1664,16 @@ export default function ImageGenerator() {
                         <img
                           src={file.thumbnail || 'https://placehold.co/400x300?text=GDrive+Image'}
                           alt={file.name}
+                          onClick={() => openZoom(`https://drive.google.com/uc?export=view&id=${extractGDriveFileId(file.id)}`)}
                           onError={(e) => {
-                            e.target.src = 'https://placehold.co/400x300?text=Drive+Image';
+                            const cleanId = extractGDriveFileId(file.id);
+                            if (cleanId && !e.target.src.includes('export=view')) {
+                              e.target.src = `https://drive.google.com/uc?export=view&id=${cleanId}`;
+                            } else {
+                              e.target.src = 'https://placehold.co/400x300?text=Drive+Image';
+                            }
                           }}
-                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover', cursor: 'zoom-in' }}
                         />
                         <span style={{
                           position: 'absolute',
@@ -1829,11 +1872,31 @@ export default function ImageGenerator() {
                       {/* Generated Image Preview */}
                       {generatedImages[item.id]?.url && (
                         <div style={{ marginTop: '0.75rem', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
-                          <img
-                            src={generatedImages[item.id].url}
-                            alt={`Generated for slide ${item.slide || idx + 1}`}
-                            style={{ width: '100%', maxHeight: '400px', objectFit: 'contain', background: 'rgba(0,0,0,0.3)' }}
-                          />
+                          <div style={{ position: 'relative', overflow: 'hidden' }}>
+                            <img
+                              src={generatedImages[item.id].url}
+                              alt={`Generated for slide ${item.slide || idx + 1}`}
+                              onClick={() => openZoom(generatedImages[item.id].url)}
+                              style={{ width: '100%', maxHeight: '400px', objectFit: 'contain', background: 'rgba(0,0,0,0.3)', cursor: 'zoom-in' }}
+                            />
+                            <div style={{
+                              position: 'absolute',
+                              bottom: '0.5rem',
+                              right: '0.5rem',
+                              background: 'rgba(0,0,0,0.65)',
+                              color: 'rgba(255,255,255,0.9)',
+                              fontSize: '0.62rem',
+                              padding: '0.2rem 0.45rem',
+                              borderRadius: '4px',
+                              pointerEvents: 'none',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.25rem',
+                              border: '1px solid rgba(255,255,255,0.1)'
+                            }}>
+                              🔍 Klik untuk perbesar
+                            </div>
+                          </div>
                           <div style={{ padding: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)' }}>
                             <span style={{ fontSize: '0.72rem', color: '#2dd4bf' }}>✅ Generated with {openRouterModel}</span>
                             <div style={{ display: 'flex', gap: '0.4rem' }}>
@@ -1910,8 +1973,112 @@ export default function ImageGenerator() {
               <span>Klik <strong>Gemini</strong> atau <strong>ChatGPT</strong> untuk meluncurkan AI. Prompt akan otomatis disalin ke clipboard Anda. Di ChatGPT, prompt akan langsung terisi secara otomatis di kolom input. Di Gemini, Anda cukup melakukan penempelan manual (Paste / Ctrl+V).</span>
             </div>
           )}
-        </div>
+        {/* Lightbox / Zoom Modal */}
+        {zoomImage && (
+          <div 
+            onClick={() => setZoomImage(null)}
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(0, 0, 0, 0.92)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 9999,
+              cursor: 'zoom-out',
+              padding: '2rem',
+              backdropFilter: 'blur(10px)'
+            }}
+          >
+            <button 
+              onClick={() => setZoomImage(null)}
+              style={{
+                position: 'absolute',
+                top: '1.5rem',
+                right: '1.5rem',
+                background: 'rgba(255,255,255,0.1)',
+                border: 'none',
+                borderRadius: '50%',
+                width: '40px',
+                height: '40px',
+                color: '#fff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                fontSize: '1.5rem',
+                zIndex: 10000,
+                transition: 'background 0.2s'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+            >
+              &times;
+            </button>
+            
+            {zoomError ? (
+              <div 
+                style={{
+                  background: 'rgba(30, 41, 59, 0.7)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  padding: '2.5rem 2rem',
+                  borderRadius: '16px',
+                  textAlign: 'center',
+                  maxWidth: '450px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: '1.25rem',
+                  boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)',
+                  backdropFilter: 'blur(20px)'
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <AlertCircle size={48} style={{ color: '#ef4444' }} />
+                <h3 style={{ color: '#fff', fontSize: '1.1rem', margin: 0, fontWeight: '600' }}>Gagal Memuat Preview Gambar</h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', lineHeight: '1.4', margin: 0 }}>
+                  Aplikasi gagal memuat gambar ini secara langsung dari Google Drive. Pastikan akses folder diatur ke "Siapa saja yang memiliki link" atau buka langsung di browser.
+                </p>
+                <a
+                  href={zoomImage.includes('drive.google.com') ? `https://drive.google.com/open?id=${extractGDriveFileId(zoomImage)}` : zoomImage}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn-primary"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.5rem 1rem', fontSize: '0.82rem', height: '34px' }}
+                >
+                  <ExternalLink size={14} /> Buka Gambar di Browser
+                </a>
+              </div>
+            ) : (
+              <img
+                src={zoomImage}
+                alt="Zoomed Preview"
+                onError={(e) => {
+                  if (typeof zoomImage === 'string' && zoomImage.includes('export=view')) {
+                    const id = extractGDriveFileId(zoomImage);
+                    setZoomImage(`https://drive.google.com/thumbnail?id=${id}&sz=w1000`);
+                  } else {
+                    setZoomError(true);
+                  }
+                }}
+                style={{
+                  maxWidth: '95%',
+                  maxHeight: '90vh',
+                  objectFit: 'contain',
+                  borderRadius: '8px',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+                  border: '1px solid rgba(255,255,255,0.15)'
+                }}
+                onClick={(e) => e.stopPropagation()} // prevent closing when clicking the image itself
+              />
+            )}
+          </div>
+        )}
 
+        </div>
       </div>
     </div>
   );

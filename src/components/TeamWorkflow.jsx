@@ -18,6 +18,36 @@ function extractGDriveFolderId(url) {
   return '';
 }
 
+function extractGDriveFileId(url) {
+  if (!url) return '';
+  url = url.trim();
+  
+  // 1. Cek format URL sharing standar (/file/d/ID/view)
+  const fileMatch = url.match(/\/file\/d\/([a-zA-Z0-9-_]+)/);
+  if (fileMatch && fileMatch[1]) {
+    return fileMatch[1];
+  }
+  
+  // 2. Cek format query param (?id=ID atau &id=ID)
+  const idMatch = url.match(/[?&]id=([a-zA-Z0-9-_]+)/);
+  if (idMatch && idMatch[1]) {
+    return idMatch[1];
+  }
+  
+  // 3. Cek format URL path langsung (/open?id=ID)
+  const openMatch = url.match(/\/open\?id=([a-zA-Z0-9-_]+)/);
+  if (openMatch && openMatch[1]) {
+    return openMatch[1];
+  }
+  
+  // 4. Jika hanya ID mentah biasa
+  if (/^[a-zA-Z0-9-_]{20,60}$/.test(url)) {
+    return url;
+  }
+  
+  return url;
+}
+
 export default function TeamWorkflow() {
   // Authentication states
   const [token, setToken] = useState(localStorage.getItem('bgi_team_token') || '');
@@ -37,11 +67,21 @@ export default function TeamWorkflow() {
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL'); // 'ALL', 'PENDING', 'UPLOADED', 'DONE'
+  const [sortBy, setSortBy] = useState('NEWEST'); // 'NEWEST', 'OLDEST', 'NAME_ASC', 'NAME_DESC'
 
   // CS inputs
   const [selectedFile, setSelectedFile] = useState(null);
   const [proofLink, setProofLink] = useState('');
   const [submittingCS, setSubmittingCS] = useState(false);
+  const [zoomImage, setZoomImage] = useState(null);
+  const [zoomError, setZoomError] = useState(false);
+  const [zoomFile, setZoomFile] = useState(null);
+
+  const openZoom = (url, file) => {
+    setZoomError(false);
+    setZoomImage(url);
+    setZoomFile(file || null);
+  };
 
   // Action states for Project Leader
   const [actionStates, setActionStates] = useState({}); // { [fileId]: { loading: boolean } }
@@ -423,24 +463,24 @@ export default function TeamWorkflow() {
   };
 
   // Helper: Download image to local PC
-  const downloadImage = async (file) => {
+  const downloadImage = (file) => {
     try {
       setStatus(`Mendownload ${file.file_name}...`);
-      const response = await fetch(`https://lh3.googleusercontent.com/d/${file.gdrive_file_id}=s0`); // Get raw image link
-      const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
+      // Gunakan URL download langsung Google Drive di tab baru untuk menghindari batasan CORS
+      const downloadUrl = `https://drive.google.com/uc?export=download&id=${extractGDriveFileId(file.gdrive_file_id)}`;
       
       const link = document.createElement('a');
-      link.href = blobUrl;
+      link.href = downloadUrl;
+      link.target = '_blank';
       link.download = file.file_name;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       
-      setStatus('✅ Download selesai!');
+      setStatus('✅ Unduhan dimulai!');
       setTimeout(() => setStatus(''), 2000);
     } catch (err) {
-      setError(`Gagal mendownload gambar secara langsung: ${err.message}. Silakan buka link Google Drive file untuk mendownload.`);
+      setError(`Gagal mendownload gambar: ${err.message}. Silakan buka link Google Drive file untuk mendownload.`);
     }
   };
 
@@ -544,6 +584,25 @@ export default function TeamWorkflow() {
     return file.status === statusFilter;
   });
 
+  const getSortedFiles = () => {
+    const sorted = [...filteredFiles];
+    if (sortBy === 'NEWEST') {
+      return sorted.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    }
+    if (sortBy === 'OLDEST') {
+      return sorted.sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
+    }
+    if (sortBy === 'NAME_ASC') {
+      return sorted.sort((a, b) => (a.file_name || '').localeCompare(b.file_name || ''));
+    }
+    if (sortBy === 'NAME_DESC') {
+      return sorted.sort((a, b) => (b.file_name || '').localeCompare(a.file_name || ''));
+    }
+    return sorted;
+  };
+
+  const sortedFiles = getSortedFiles();
+
   return (
     <div className="settings-container">
       {/* Tab Header / Profile */}
@@ -606,8 +665,10 @@ export default function TeamWorkflow() {
             </button>
           </div>
 
-          {/* Status Filter Tab Buttons */}
-          <div style={{ display: 'flex', gap: '0.35rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
+          {/* Filter & Sorting Controls Row */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+            {/* Status Filter Tab Buttons */}
+            <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
             {[
               { id: 'ALL', label: 'Semua' },
               { id: 'PENDING', label: 'Pending' },
@@ -666,6 +727,34 @@ export default function TeamWorkflow() {
                 </button>
               );
             })}
+            </div>
+
+            {/* Sorting Dropdown */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Urutkan:</span>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="input-text"
+                style={{
+                  height: '28px',
+                  fontSize: '0.72rem',
+                  padding: '0 0.5rem',
+                  borderRadius: '6px',
+                  background: 'rgba(255, 255, 255, 0.03)',
+                  borderColor: 'rgba(255, 255, 255, 0.08)',
+                  color: 'var(--text-main)',
+                  width: 'auto',
+                  cursor: 'pointer',
+                  margin: 0
+                }}
+              >
+                <option value="NEWEST" style={{ background: '#1e293b' }}>🆕 Terbaru</option>
+                <option value="OLDEST" style={{ background: '#1e293b' }}>⏳ Terlama</option>
+                <option value="NAME_ASC" style={{ background: '#1e293b' }}>🔤 Nama A-Z</option>
+                <option value="NAME_DESC" style={{ background: '#1e293b' }}>🔤 Nama Z-A</option>
+              </select>
+            </div>
           </div>
 
           {loading ? (
@@ -673,7 +762,7 @@ export default function TeamWorkflow() {
               <div className="loading-spinner" style={{ width: '40px', height: '40px', borderWidth: '3px' }}></div>
               <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Membaca antrean dari VPS...</span>
             </div>
-          ) : filteredFiles.length === 0 ? (
+          ) : sortedFiles.length === 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, minHeight: '300px', color: 'var(--text-muted)', gap: '0.5rem' }}>
               <CheckCircle2 size={40} style={{ color: '#34d399', opacity: 0.7 }} />
               <span style={{ fontSize: '0.9rem', fontWeight: '600', color: 'var(--text-main)' }}>Kosong</span>
@@ -691,7 +780,7 @@ export default function TeamWorkflow() {
               paddingRight: '0.25rem',
               paddingBottom: '1rem'
             }}>
-              {filteredFiles.map((file) => (
+              {sortedFiles.map((file) => (
                 <div
                   key={file.id}
                   onClick={() => userRole === 'cs' && file.status === 'PENDING' && setSelectedFile(file)}
@@ -711,12 +800,20 @@ export default function TeamWorkflow() {
                   {/* Thumbnail */}
                   <div style={{ width: '100%', height: '140px', position: 'relative', overflow: 'hidden', background: 'rgba(0, 0, 0, 0.2)' }}>
                     <img
-                      src={`https://lh3.googleusercontent.com/d/${file.gdrive_file_id}=w400`}
+                      src={`https://drive.google.com/thumbnail?id=${extractGDriveFileId(file.gdrive_file_id)}&sz=w400`}
                       alt={file.file_name}
-                      onError={(e) => {
-                        e.target.src = 'https://placehold.co/400x300?text=Drive+Image';
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openZoom(`https://drive.google.com/uc?export=view&id=${extractGDriveFileId(file.gdrive_file_id)}`, file);
                       }}
-                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      onError={(e) => {
+                        if (!e.target.src.includes('export=view')) {
+                          e.target.src = `https://drive.google.com/uc?export=view&id=${extractGDriveFileId(file.gdrive_file_id)}`;
+                        } else {
+                          e.target.src = 'https://placehold.co/400x300?text=Drive+Image';
+                        }
+                      }}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover', cursor: 'zoom-in' }}
                     />
                     <span style={{
                       position: 'absolute',
@@ -895,23 +992,58 @@ export default function TeamWorkflow() {
             
             {selectedFile ? (
               <form onSubmit={handleSubmitProof} style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '8px', padding: '0.75rem', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-                  <img
-                    src={`https://lh3.googleusercontent.com/d/${selectedFile.gdrive_file_id}=w100`}
-                    alt={selectedFile.file_name}
-                    style={{ width: '50px', height: '50px', objectFit: 'cover', borderRadius: '6px' }}
-                  />
-                  <div style={{ overflow: 'hidden' }}>
-                    <div style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {/* Full-width Image Preview Container at the top of the form */}
+                <div style={{ 
+                  background: 'rgba(0, 0, 0, 0.2)', 
+                  border: '1px solid rgba(255, 255, 255, 0.08)', 
+                  borderRadius: '10px', 
+                  overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column'
+                }}>
+                  <div style={{ width: '100%', height: '220px', background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative' }}>
+                    <img
+                      src={`https://drive.google.com/thumbnail?id=${extractGDriveFileId(selectedFile.gdrive_file_id)}&sz=w600`}
+                      alt={selectedFile.file_name}
+                      onClick={() => openZoom(`https://drive.google.com/uc?export=view&id=${extractGDriveFileId(selectedFile.gdrive_file_id)}`, selectedFile)}
+                      onError={(e) => {
+                        if (!e.target.src.includes('export=view')) {
+                          e.target.src = `https://drive.google.com/uc?export=view&id=${extractGDriveFileId(selectedFile.gdrive_file_id)}`;
+                        } else {
+                          e.target.src = 'https://placehold.co/400x300?text=Drive+Image';
+                        }
+                      }}
+                      style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', cursor: 'zoom-in' }}
+                    />
+                    <div style={{
+                      position: 'absolute',
+                      bottom: '0.5rem',
+                      right: '0.5rem',
+                      background: 'rgba(0,0,0,0.65)',
+                      color: 'rgba(255,255,255,0.9)',
+                      fontSize: '0.62rem',
+                      padding: '0.2rem 0.45rem',
+                      borderRadius: '4px',
+                      pointerEvents: 'none',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.25rem',
+                      border: '1px solid rgba(255,255,255,0.1)'
+                    }}>
+                      🔍 Klik untuk perbesar
+                    </div>
+                  </div>
+                  <div style={{ padding: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: '600', color: 'var(--text-main)', wordBreak: 'break-all' }}>
                       {selectedFile.file_name}
                     </div>
                     <a
                       href={selectedFile.gdrive_url}
                       target="_blank"
                       rel="noreferrer"
-                      style={{ fontSize: '0.68rem', color: '#2dd4bf', textDecoration: 'underline', display: 'flex', alignItems: 'center', gap: '0.15rem', marginTop: '0.15rem' }}
+                      style={{ fontSize: '0.7rem', color: '#2dd4bf', textDecoration: 'underline', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', marginTop: '0.35rem' }}
                     >
-                      <ExternalLink size={10} /> Lihat di GDrive
+                      <ExternalLink size={12} /> Lihat Asli di GDrive
                     </a>
                   </div>
                 </div>
@@ -1091,6 +1223,110 @@ export default function TeamWorkflow() {
                 )}
               </button>
             </form>
+          </div>
+        )}
+        {/* Lightbox / Zoom Modal */}
+        {zoomImage && (
+          <div 
+            onClick={() => setZoomImage(null)}
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(0, 0, 0, 0.92)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 9999,
+              cursor: 'zoom-out',
+              padding: '2rem',
+              backdropFilter: 'blur(10px)'
+            }}
+          >
+            <button 
+              onClick={() => setZoomImage(null)}
+              style={{
+                position: 'absolute',
+                top: '1.5rem',
+                right: '1.5rem',
+                background: 'rgba(255,255,255,0.1)',
+                border: 'none',
+                borderRadius: '50%',
+                width: '40px',
+                height: '40px',
+                color: '#fff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                fontSize: '1.5rem',
+                zIndex: 10000,
+                transition: 'background 0.2s'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+            >
+              &times;
+            </button>
+            
+            {zoomError ? (
+              <div 
+                style={{
+                  background: 'rgba(30, 41, 59, 0.7)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  padding: '2.5rem 2rem',
+                  borderRadius: '16px',
+                  textAlign: 'center',
+                  maxWidth: '450px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: '1.25rem',
+                  boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)',
+                  backdropFilter: 'blur(20px)'
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <ShieldAlert size={48} style={{ color: '#ef4444' }} />
+                <h3 style={{ color: '#fff', fontSize: '1.1rem', margin: 0, fontWeight: '600' }}>Gagal Memuat Preview Gambar</h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', lineHeight: '1.4', margin: 0 }}>
+                  Google Drive menolak pemuatan langsung gambar ini. Pastikan folder sharing Anda diatur ke "Siapa saja yang memiliki link" atau buka langsung melalui Google Drive.
+                </p>
+                <a
+                  href={zoomFile?.gdrive_url || `https://drive.google.com/open?id=${extractGDriveFileId(zoomFile?.gdrive_file_id)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn-primary"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.5rem 1rem', fontSize: '0.82rem', height: '34px' }}
+                >
+                  <ExternalLink size={14} /> Buka di Google Drive
+                </a>
+              </div>
+            ) : (
+              <img
+                src={zoomImage}
+                alt="Zoomed Preview"
+                onError={(e) => {
+                  if (zoomImage.includes('export=view')) {
+                    const id = extractGDriveFileId(zoomImage);
+                    setZoomImage(`https://drive.google.com/thumbnail?id=${id}&sz=w1000`);
+                  } else {
+                    setZoomError(true);
+                  }
+                }}
+                style={{
+                  maxWidth: '95%',
+                  maxHeight: '90vh',
+                  objectFit: 'contain',
+                  borderRadius: '8px',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+                  border: '1px solid rgba(255,255,255,0.15)'
+                }}
+                onClick={(e) => e.stopPropagation()} // prevent closing when clicking the image itself
+              />
+            )}
           </div>
         )}
 
