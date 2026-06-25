@@ -106,15 +106,43 @@ function getPlaywrightBrowserDir() {
   return path.join(home, '.cache', 'ms-playwright');
 }
 
+function getExpectedChromiumRevision() {
+  try {
+    const appDir = isDev
+      ? path.join(__dirname, '..')
+      : path.join(process.resourcesPath, 'app');
+    const browsersJsonPath = path.join(appDir, 'node_modules', 'playwright-core', 'browsers.json');
+    if (fs.existsSync(browsersJsonPath)) {
+      const data = JSON.parse(fs.readFileSync(browsersJsonPath, 'utf8'));
+      const chromiumObj = data.browsers.find(b => b.name === 'chromium');
+      if (chromiumObj && chromiumObj.revision) {
+        return chromiumObj.revision;
+      }
+    }
+  } catch (err) {
+    console.error('[Main] Failed to parse browsers.json:', err);
+  }
+  return null;
+}
+
 function isChromiumInstalled() {
   const browserDir = getPlaywrightBrowserDir();
   if (!fs.existsSync(browserDir)) return false;
+
+  const expectedRevision = getExpectedChromiumRevision();
+  console.log(`[Main] Expected Playwright Chromium revision: ${expectedRevision || 'any'}`);
 
   // Check for chromium-* directory and verify the actual chrome binary exists
   try {
     const entries = fs.readdirSync(browserDir);
     for (const entry of entries) {
       if (!entry.startsWith('chromium-')) continue;
+      
+      // If we know the expected revision, require it to match exactly
+      if (expectedRevision && entry !== `chromium-${expectedRevision}`) {
+        continue;
+      }
+
       const chromiumDir = path.join(browserDir, entry);
       if (!fs.statSync(chromiumDir).isDirectory()) continue;
 
