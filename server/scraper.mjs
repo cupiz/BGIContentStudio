@@ -18,14 +18,16 @@ const DEFAULT_PORT = parseInt(process.env.BGI_SERVER_PORT || '3001', 10);
 // so that relative /api/ fetch calls work correctly (no Vite proxy).
 const isProduction = process.env.NODE_ENV === 'production';
 const distPath = process.env.BGI_FRONTEND_DIST || path.join(process.cwd(), 'dist');
-if (isProduction && fs.existsSync(distPath)) {
-  console.log(`[Server] Serving frontend from: ${distPath}`);
-  app.use(express.static(distPath));
-}
 
 app.use(cors());
 app.use(express.json({ limit: '200mb' }));
 app.use(express.urlencoded({ limit: '200mb', extended: true }));
+
+// Static files AFTER body parsers — standard Express ordering
+if (isProduction && fs.existsSync(distPath)) {
+  console.log(`[Server] Serving frontend from: ${distPath}`);
+  app.use(express.static(distPath));
+}
 
 // Increase Node.js HTTP server max body size
 app.use((req, res, next) => {
@@ -1419,14 +1421,30 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'BGI Scraper Server berjalan dengan baik!', version: '2.0' });
 });
 
-// ===== SPA catch-all: serve index.html for non-API routes in production =====
+// ===== SPA catch-all: serve index.html for non-API, non-file routes in production =====
+// Use app.use() middleware instead of app.get('*splat') to avoid Express 5 route priority issues.
+// Only intercept GET requests to paths WITHOUT a file extension (i.e., SPA routes, not assets).
 if (isProduction && fs.existsSync(distPath)) {
-  app.get('*splat', (req, res) => {
-    if (!req.path.startsWith('/api')) {
-      res.sendFile(path.join(distPath, 'index.html'));
-    } else {
-      res.status(404).json({ error: 'API endpoint not found' });
+  app.use((req, res, next) => {
+    // Only handle GET requests, skip API paths
+    if (req.method !== 'GET' || req.path.startsWith('/api')) {
+      return next();
     }
+    
+    // Skip paths that look like file requests (have an extension like .js, .css, .png, etc.)
+    // express.static should have served these files; if it didn't, let it 404 naturally
+    const ext = path.extname(req.path);
+    if (ext) {
+      return next();
+    }
+    
+    // For all other GET routes, serve index.html for the SPA
+    res.sendFile(path.join(distPath, 'index.html'), (err) => {
+      if (err) {
+        console.error('[Server] SPA fallback error:', err.message);
+        res.status(500).json({ error: 'Failed to serve application' });
+      }
+    });
   });
 }
 

@@ -383,7 +383,7 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.cjs'),
-      webSecurity: isDev ? false : true
+      webSecurity: false  // Disabled for production to prevent text-input & CORS issues with localhost server
     },
     show: false,
     backgroundColor: '#0f0f23'

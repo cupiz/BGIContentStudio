@@ -76,6 +76,7 @@ export default function ImageGenerator() {
   const [analyzingImage, setAnalyzingImage] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
   const [showContext, setShowContext] = useState(false);
+  const [keepLogoInfo, setKeepLogoInfo] = useState(false);
   const [openRouterModel, setOpenRouterModel] = useState('sourceful/riverflow-v2.5-fast');
   const [openRouterResolution, setOpenRouterResolution] = useState('1K');
   const [openRouterAspectRatio, setOpenRouterAspectRatio] = useState('1:1');
@@ -175,6 +176,7 @@ export default function ImageGenerator() {
         if (st.openRouterResolution) setOpenRouterResolution(st.openRouterResolution);
         if (st.openRouterAspectRatio) setOpenRouterAspectRatio(st.openRouterAspectRatio);
         if (typeof st.showContext === 'boolean') setShowContext(st.showContext);
+        if (typeof st.keepLogoInfo === 'boolean') setKeepLogoInfo(st.keepLogoInfo);
       } catch (e) {}
     }
 
@@ -283,14 +285,23 @@ export default function ImageGenerator() {
         });
 
         if (result && result.prompt) {
+          let promptText = result.prompt;
+          // Tambahkan instruksi jika checkbox logo & info akun aktif
+          if (keepLogoInfo) {
+            const instruction = '\n\n[INSTRUKSI PENTING: Jangan ubah logo dan informasi akun. Pertahankan logo, nama merek, username, dan informasi kontak apa pun yang sudah ada dalam gambar.]';
+            if (!promptText.includes(instruction.trim().substring(0, 30))) {
+              promptText += instruction;
+            }
+          }
           const newPrompt = {
             id: Date.now() + i,
-            text: result.prompt,
+            text: promptText,
             slide: result.slide || i,
             hook: result.hook || '',
             visualStyle: result.visualStyle || '',
             status: 'ready',
           };
+          result.prompt = promptText;
           generated.push(result);
           setPrompts(prev => {
             const updated = [...prev, newPrompt];
@@ -516,6 +527,7 @@ export default function ImageGenerator() {
       openRouterResolution,
       openRouterAspectRatio,
       showContext,
+      keepLogoInfo,
     }));
   };
 
@@ -1226,6 +1238,53 @@ export default function ImageGenerator() {
                 style={{ minHeight: '160px', fontSize: '0.85rem' }}
               />
             </div>
+
+            {/* Checkbox: Jangan Ubah Logo dan Informasi Akun */}
+            <label style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.6rem',
+              padding: '0.55rem 0.75rem',
+              marginBottom: '0.75rem',
+              background: keepLogoInfo ? 'rgba(245, 158, 11, 0.08)' : 'rgba(255,255,255,0.02)',
+              border: '1px solid ' + (keepLogoInfo ? 'rgba(245, 158, 11, 0.3)' : 'var(--border-color)'),
+              borderRadius: '8px',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+              userSelect: 'none',
+              fontSize: '0.82rem',
+              fontWeight: '500',
+              color: keepLogoInfo ? '#fbbf24' : 'var(--text-secondary)'
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = keepLogoInfo ? 'rgba(245, 158, 11, 0.5)' : 'rgba(255,255,255,0.15)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = keepLogoInfo ? 'rgba(245, 158, 11, 0.3)' : 'var(--border-color)'; }}
+            >
+              <input
+                type="checkbox"
+                checked={keepLogoInfo}
+                onChange={(e) => setKeepLogoInfo(e.target.checked)}
+                style={{
+                  width: '18px',
+                  height: '18px',
+                  accentColor: '#f59e0b',
+                  cursor: 'pointer',
+                  flexShrink: 0
+                }}
+              />
+              <span>🔒 Jangan Ubah Logo &amp; Informasi Akun</span>
+              {keepLogoInfo && (
+                <span style={{
+                  fontSize: '0.68rem',
+                  color: '#fbbf24',
+                  background: 'rgba(245, 158, 11, 0.12)',
+                  padding: '0.1rem 0.4rem',
+                  borderRadius: '4px',
+                  marginLeft: 'auto'
+                }}>
+                  AKTIF
+                </span>
+              )}
+            </label>
 
             <div className="grid-2">
               <div className="form-group">
