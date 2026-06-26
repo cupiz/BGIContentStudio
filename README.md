@@ -2,7 +2,21 @@
 
 BGI Content Studio adalah aplikasi asisten pembuatan konten media sosial premium berbasis AI yang dirancang untuk memetakan strategi brand, menyusun pilar konten, menghasilkan ide, draf skrip, hook, hingga caption siap pakai secara otomatis — tersedia sebagai **aplikasi desktop** dan **web app**.
 
-Aplikasi ini menggunakan teknologi **React (Vite)** untuk antarmuka pengguna, **Electron** untuk distribusi desktop, **Express** untuk backend service, **Gemini AI API** untuk kecerdasan analisis konten, **OpenRouter** untuk generasi gambar AI, dan **Playwright** untuk scraping profil Instagram secara real.
+Aplikasi ini menggunakan kombinasi teknologi modern berikut untuk memastikan performa tinggi, keamanan, dan kemudahan kolaborasi tim.
+
+## 🛠️ Tech Stack & Komponen Utama
+
+| Layer / Komponen | Teknologi | Deskripsi / Peran |
+| :--- | :--- | :--- |
+| **Frontend (User Interface)** | **React 19**, **Vite 8** | Antarmuka pengguna yang cepat, modular, dan responsif. |
+| **Desktop Shell** | **Electron 32** | Membungkus aplikasi web menjadi aplikasi desktop native Windows (`.exe`) dengan *Splash Screen* dan *System Tray*. |
+| **Backend & API** | **Express 5 (Node.js)** | Menyediakan REST API lokal untuk scraping, menjembatani integrasi AI, serta menangani sinkronisasi database. |
+| **Database & VPS** | **PostgreSQL** (`pg` & `pg-pool`) | Database relasional untuk menyimpan data kolaborasi tim secara terpusat di Cloud VPS produksi. |
+| **Kecerdasan Buatan (AI)** | **Google Gemini AI API** | Digunakan untuk analisis strategis brand, niche profiling, penulisan skrip video, hook emosional, dan takarir (caption). |
+| **AI Image Generation** | **OpenRouter API** | Menghasilkan gambar ilustrasi berkualitas tinggi menggunakan model **Grok Imagine** dan **RiverFlow v2.5**. |
+| **Instagram Scraper** | **Playwright 1.60.0** | Melakukan emulasi browser seluler (iPhone 13) untuk mengambil data grid postingan kompetitor secara aman dan real-time. |
+| **Cloud Storage Sync** | **Google Drive API** & **Apps Script Web App** | Mengunggah hasil skrip dan gambar AI secara otomatis ke folder Google Drive perusahaan (subfolder harian). |
+| **Auto-Updater** | **GitHub API** & **adm-zip** | Sistem pembaruan aplikasi desktop otomatis dari rilis GitHub dengan fitur pencadangan (*backup*) & pemulihan otomatis (*rollback*). |
 
 ---
 
